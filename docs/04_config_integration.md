@@ -32,12 +32,16 @@
 见 [config/MiniNvm\_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniNvm_Cfg.h)。
 
 | 宏                        | 默认           |
-| ------------------------ | ------------ |
+| ------------------------ | -------------- |
 | `MININVM_MAX_NUM_BLOCKS` | 块 ID 枚举末项，自动等于块数量 |
+| `MININVM_BLOCK_x_SIZE`   | 逐块大小宏（配置表与镜像容量的唯一数据源） |
+| `MININVM_RAM_MIRROR_SIZE` | 自动=各块 `MININVM_BLOCK_x_SIZE` 之和，勿手填 |
 | `MININVM_DEFAULT_BYTE`   | 0xFF         |
 
 - 块 ID 和块数量由枚举维护；`MININVM_MAX_NUM_BLOCKS` 不得手工定义或传入初始化。
 - 块配置表与 RAM mirror 直接在 `MiniNvm_Cfg.h` 中静态创建，`MiniNvm_Init(void)` 自动使用。
+- 各块大小以 `MININVM_BLOCK_x_SIZE` 宏为唯一数据源，配置表条目引用该宏；`MININVM_RAM_MIRROR_SIZE` 由各块 size 宏求和自动计算，禁止手工填总容量。
+- 新增块需同步 4 处：枚举项、`MININVM_BLOCK_x_SIZE` 宏、配置表条目、`MININVM_RAM_MIRROR_SIZE` 求和项。漏加求和项时 `MiniNvm_Init` 的运行时容量校验会拒绝（E_NOT_OK）兜底。
 
 - 集成方示例：
 
@@ -47,15 +51,19 @@
       MININVM_BLOCK_ID_COUNTER,
       MININVM_MAX_NUM_BLOCKS
     } MiniNvm_BlockIdType;
+    #define MININVM_BLOCK_0_SIZE  ((uint16)0x80u)
+    #define MININVM_BLOCK_1_SIZE  ((uint16)0x40u)
+    #define MININVM_RAM_MIRROR_SIZE \
+        ((uint16)(MININVM_BLOCK_0_SIZE + MININVM_BLOCK_1_SIZE))
     static const MiniNvm_BlockConfigType MiniNvm_BlockConfig[MININVM_MAX_NUM_BLOCKS] = {
-      {MININVM_BLOCK_ID_CONFIG, 0x80, 0, TRUE, TRUE},
-      {MININVM_BLOCK_ID_COUNTER, 0x40, 0, TRUE, TRUE}
+      {MININVM_BLOCK_ID_CONFIG, MININVM_BLOCK_0_SIZE, 0, TRUE, TRUE},
+      {MININVM_BLOCK_ID_COUNTER, MININVM_BLOCK_1_SIZE, 0, TRUE, TRUE}
     };
-    static uint8 MiniNvm_RamMirror[0xC0];
+    static uint8 MiniNvm_RamMirror[MININVM_RAM_MIRROR_SIZE];
     MiniNvm_Init();
   ```
 
-- `MiniNvm_Init` 校验：配置表条目数等于 `MININVM_MAX_NUM_BLOCKS`、RAM mirror ≥ 各块 size 之和、`MiniFee_Init` 容量约束满足。
+- `MiniNvm_Init` 校验：RAM 容量兜底（按 size 累加的 offset ≤ `MININVM_RAM_MIRROR_SIZE`；求和宏构造下恒等，用于拦截漏加求和项的人为错误）、`MiniFee_Init` 容量约束满足。配置表长度由数组维度在编译期锁定。
 
 ## 3. OS 集成
 

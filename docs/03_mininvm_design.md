@@ -19,7 +19,8 @@ typedef struct {
 ```
 
 - 集成方在 `MiniNvm_Cfg.h` 的 `MiniNvm_BlockConfig` 数组中逐块指定
-  `size`/`readAll`/`writeAll`，并在同一配置头中按总大小创建 `MiniNvm_RamMirror` 静态数组。
+  `size`（引用 `MININVM_BLOCK_x_SIZE` 宏）/`readAll`/`writeAll`；`MiniNvm_RamMirror`
+  容量由 `MININVM_RAM_MIRROR_SIZE` 宏（各块 size 之和）自动计算，禁止手工填总大小。
 - `MiniNvm_Init(void)` 直接使用该配置表和 mirror，按各块 `size` 累加计算 `ramOffsets[]`，
   并校验配置表条目和 mirror 容量。
 - `MiniNvm_GetBlockSize(blockId)` / `MiniNvm_GetNumBlocks()` 供调用方查询实际块大小与块数。

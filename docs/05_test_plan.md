@@ -40,7 +40,7 @@
 | TC-N-06 | 写块0/1 | FailAnyWrites(1)→WriteAll→GetErrorStatus(0)→再 WriteAll | E_NOT_OK+ERR_WRITE；重试 E_OK | #11 |
 | TC-N-07 | Init+ReadAll | 写 5 块→WriteAll→重启→读 5 块 | 全部一致（变长 size） | #13,#15 |
 | TC-N-08 | Init | GetBlockSize(0/1/2)+GetNumBlocks | 各块 size 正确；块数=8 | #15 |
-| TC-N-09 | 全 0xFF | Reset+Init()→GetNumBlocks | Init E_OK；块数=MININVM_MAX_NUM_BLOCKS（配置表与 RAM 镜像由 MiniNvm_Cfg.h 静态提供） | — |
+| TC-N-09 | 全 0xFF | Reset+Init()→GetNumBlocks→累加各块 GetBlockSize | Init E_OK；块数=MININVM_MAX_NUM_BLOCKS；Σsize=MININVM_RAM_MIRROR_SIZE（镜像容量自动计算正确） | — |
 
 ## 4. 覆盖追溯
 

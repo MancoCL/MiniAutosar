@@ -189,6 +189,15 @@ static void tc_init_param(void)
     FlashDrv_Stub_Reset();
     CHECK(MiniNvm_Init() == E_OK, "static config Init");
     CHECK(MiniNvm_GetNumBlocks() == (uint16)MININVM_MAX_NUM_BLOCKS, "enum count matches config");
+    {
+        uint16 total = 0u;
+        uint16 b;
+        for (b = 0u; b < MiniNvm_GetNumBlocks(); b++)
+        {
+            total = (uint16)(total + MiniNvm_GetBlockSize(b));
+        }
+        CHECK(total == MININVM_RAM_MIRROR_SIZE, "mirror size == sum of block sizes");
+    }
 }
 
 void run_mininvm_tests(void)
