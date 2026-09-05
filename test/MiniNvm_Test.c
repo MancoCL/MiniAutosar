@@ -2,7 +2,7 @@
  * \file MiniNvm_Test.c
  * \brief MiniNvm 单元测试（宿主机）
  *
- * 块数量与各块大小均由测试自备配置表传入，验证动态配置语义。
+ * 块数量、块表和 RAM mirror 来自 MiniNvm_Cfg.h，验证静态配置语义。
  */
 #include "Test_Common.h"
 #include "MiniNvm.h"
@@ -12,22 +12,6 @@
 #include "MiniFee_Cfg.h"
 #include <string.h>
 
-/* ---- 测试自备块配置（8 块，各块大小不同） ---- */
-#define TEST_NUM_BLOCKS  ((uint16)8)
-
-/* 各块 size: 0x80+0x40+0xF0+0x20+0x80+0x10+0x60+0x40 = 768 */
-static MiniNvm_BlockConfigType testBlockCfg[TEST_NUM_BLOCKS] = {
-    {0, 0x80, 0, TRUE, TRUE},
-    {1, 0x40, 0, TRUE, TRUE},
-    {2, 0xF0, 0, TRUE, TRUE},
-    {3, 0x20, 0, TRUE, TRUE},
-    {4, 0x80, 0, TRUE, TRUE},
-    {5, 0x10, 0, TRUE, TRUE},
-    {6, 0x60, 0, TRUE, TRUE},
-    {7, 0x40, 0, TRUE, TRUE},
-};
-static uint8 testRam[768];
-
 /* 测试缓冲按页数据区大小（= 块大小上限） */
 static uint8 wbuf[MINIFEE_PAGE_DATA_SIZE];
 static uint8 rbuf[MINIFEE_PAGE_DATA_SIZE];
@@ -36,7 +20,7 @@ static uint8 rbuf[MINIFEE_PAGE_DATA_SIZE];
 static void testInit(void)
 {
     FlashDrv_Stub_Reset();
-    (void)MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam));
+    (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();
 }
 
@@ -54,7 +38,7 @@ static void pat(uint8 *buf, uint16 size, uint8 seed)
 static void tc_init_readall_firstboot(void)
 {
     FlashDrv_Stub_Reset();
-    CHECK(MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam)) == E_OK, "Init");
+    CHECK(MiniNvm_Init() == E_OK, "Init");
     /* 未 ReadAll 前读取应失败（UNINIT） */
     CHECK(MiniNvm_ReadBlock(0u, rbuf) == E_NOT_OK, "read before ReadAll -> E_NOT_OK");
     {
@@ -92,7 +76,7 @@ static void tc_writeall_persist(void)
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll");
     /* 模拟重启 */
     FlashDrv_Stub_Reset();
-    CHECK(MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam)) == E_OK, "reboot Init");
+    CHECK(MiniNvm_Init() == E_OK, "reboot Init");
     CHECK(MiniNvm_ReadAll() == E_OK, "reboot ReadAll");
     CHECK(MiniNvm_ReadBlock(0u, rbuf) == E_OK, "read back after reboot");
     pat(wbuf, sz, 0xB1);
@@ -112,7 +96,7 @@ static void tc_erase_then_writeall(void)
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll #2 (erase)");
     /* 重启后块 1 应为 NOT_FOUND */
     FlashDrv_Stub_Reset();
-    (void)MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam));
+    (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();
     CHECK(MiniNvm_ReadBlock(1u, rbuf) == E_NOT_OK, "erased block -> E_NOT_OK after reboot");
 }
@@ -130,7 +114,7 @@ static void tc_crc_error_status(void)
     FlashDrv_Stub_SetByte(10u, (uint8)(FlashDrv_Stub_GetByte(10u) ^ 0xFFu));
     /* 重启 ReadAll 应识别为 CRC 错误 */
     FlashDrv_Stub_Reset();
-    (void)MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam));
+    (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();
     {
         MiniNvm_ErrorStatusType es = 0u;
@@ -178,7 +162,7 @@ static void tc_multi_block(void)
     }
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll multi");
     FlashDrv_Stub_Reset();
-    (void)MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam));
+    (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();
     for (k = 0; k < 5; k++)
     {
@@ -192,25 +176,22 @@ static void tc_multi_block(void)
 static void tc_variable_block_size(void)
 {
     FlashDrv_Stub_Reset();
-    CHECK(MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam)) == E_OK, "Init");
+    CHECK(MiniNvm_Init() == E_OK, "Init");
     /* 块 0 = 0x80, 块 1 = 0x40, 块 2 = 0xF0 — 各不相同 */
     CHECK(MiniNvm_GetBlockSize(0u) == 0x80u, "block0 size == 0x80");
     CHECK(MiniNvm_GetBlockSize(1u) == 0x40u, "block1 size == 0x40");
     CHECK(MiniNvm_GetBlockSize(2u) == 0xF0u, "block2 size == 0xF0");
-    CHECK(MiniNvm_GetNumBlocks() == TEST_NUM_BLOCKS, "num blocks");
+    CHECK(MiniNvm_GetNumBlocks() == MININVM_MAX_NUM_BLOCKS, "num blocks from enum");
     /* 越界返回 0 */
-    CHECK(MiniNvm_GetBlockSize(TEST_NUM_BLOCKS) == 0u, "invalid block -> size 0");
+    CHECK(MiniNvm_GetBlockSize(MININVM_MAX_NUM_BLOCKS) == 0u, "invalid block -> size 0");
 }
 
-/* TC-N-09: Init 参数非法（NULL/0/超上限/RAM 不足） */
+/* TC-N-09: 枚举末项自动提供块数，配置镜像由 Init 自动使用 */
 static void tc_init_param(void)
 {
     FlashDrv_Stub_Reset();
-    CHECK(MiniNvm_Init(NULL_PTR, TEST_NUM_BLOCKS, testRam, (uint16)sizeof(testRam)) == E_NOT_OK, "NULL cfg");
-    CHECK(MiniNvm_Init(testBlockCfg, 0u, testRam, (uint16)sizeof(testRam)) == E_NOT_OK, "numBlocks=0");
-    CHECK(MiniNvm_Init(testBlockCfg, (uint16)(MININVM_MAX_NUM_BLOCKS + 1u), testRam, (uint16)sizeof(testRam)) == E_NOT_OK, "numBlocks>MAX");
-    /* RAM 缓冲不足 */
-    CHECK(MiniNvm_Init(testBlockCfg, TEST_NUM_BLOCKS, testRam, 1u) == E_NOT_OK, "RAM too small");
+    CHECK(MiniNvm_Init() == E_OK, "static config Init");
+    CHECK(MiniNvm_GetNumBlocks() == (uint16)MININVM_MAX_NUM_BLOCKS, "enum count matches config");
 }
 
 void run_mininvm_tests(void)

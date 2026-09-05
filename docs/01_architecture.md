@@ -28,7 +28,7 @@
 
 - **调用方向**：自上而下单向。bootloader 不得绕过 MiniNvm 直调 MiniFee/FlashDrv（P0 #8）。
 - **各层职责**：
-  - bootloader：上电调 `MiniNvm_Init` + `MiniNvm_ReadAll`；运行期读写块；跳转 APP/下电前调 `MiniNvm_WriteAll`。
+      - bootloader：上电调 `MiniNvm_Init` + `MiniNvm_ReadAll`；运行期读写块；跳转 APP/下电前调 `MiniNvm_WriteAll`。
   - MiniNvm：维护块表与 RAM 镜像、dirty 管理、错误状态；所有 Flash 访问经 MiniFee。
   - MiniFee：在 Flash 上模拟 EEPROM，管理页/簇、磨损均衡、GC、掉电恢复、CRC。
   - FlashDrv：屏蔽硬件差异，仅提供读/写/擦/属性查询。
@@ -95,7 +95,7 @@ FLASH_ERR_ERASE     ─→   MINIFEE_ERR_FLASH   ─→   ERR_ERASE
 ## 6. 配置框架（总体，细节见 04）
 
 - [config/MiniFee_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniFee_Cfg.h)：cluster 数、页大小、cluster 大小、CRC 类型与多项式、页头字段魔数/状态字、GC 阈值。
-- [config/MiniNvm_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniNvm_Cfg.h)：块数量、块大小、RAM 对齐、缺省字节、块配置表（块 ID/大小/镜像偏移/ReadAll·WriteAll 参与标志）。
+- [config/MiniNvm_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniNvm_Cfg.h)：块 ID 枚举（末项为块数）、块大小、RAM mirror 总容量、缺省字节、静态块配置表和静态 RAM mirror。
 - 所有量化参数为编译期宏（【假设】占位默认值），禁止运行时动态配置；`MiniFee_Init` 校验配置↔FlashDrv 属性一致性（P4 对齐要求）。
 
 ## 7. RAM 镜像策略时序

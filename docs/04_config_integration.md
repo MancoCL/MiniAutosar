@@ -33,24 +33,29 @@
 
 | 宏                        | 默认           |
 | ------------------------ | ------------ |
-| `MININVM_MAX_NUM_BLOCKS` | 64（内部静态数组上限） |
+| `MININVM_MAX_NUM_BLOCKS` | 块 ID 枚举末项，自动等于块数量 |
 | `MININVM_DEFAULT_BYTE`   | 0xFF         |
 
-- **块数量与各块大小不在头文件中硬编码**，由集成方在启动时构造 `MiniNvm_BlockConfigType` 数组并传入 `MiniNvm_Init`。
+- 块 ID 和块数量由枚举维护；`MININVM_MAX_NUM_BLOCKS` 不得手工定义或传入初始化。
+- 块配置表与 RAM mirror 直接在 `MiniNvm_Cfg.h` 中静态创建，`MiniNvm_Init(void)` 自动使用。
 
 - 集成方示例：
 
   ```c
-  static MiniNvm_BlockConfigType nvCfg[] = {
-      {0, 0x80, 0, TRUE, TRUE},
-      {1, 0x40, 0, TRUE, TRUE},
-      /* ... 按需添加，块数与大小任意 */
-  };
-  static uint8 nvRam[SUM_OF_SIZES];
-  MiniNvm_Init(nvCfg, N, nvRam, sizeof(nvRam));
+    typedef enum {
+      MININVM_BLOCK_ID_CONFIG = 0,
+      MININVM_BLOCK_ID_COUNTER,
+      MININVM_MAX_NUM_BLOCKS
+    } MiniNvm_BlockIdType;
+    static const MiniNvm_BlockConfigType MiniNvm_BlockConfig[MININVM_MAX_NUM_BLOCKS] = {
+      {MININVM_BLOCK_ID_CONFIG, 0x80, 0, TRUE, TRUE},
+      {MININVM_BLOCK_ID_COUNTER, 0x40, 0, TRUE, TRUE}
+    };
+    static uint8 MiniNvm_RamMirror[0xC0];
+    MiniNvm_Init();
   ```
 
-- `MiniNvm_Init` 校验：块数 ≤ `MININVM_MAX_NUM_BLOCKS`、RAM 缓冲 ≥ 各块 size 之和、`MiniFee_Init` 容量约束满足。
+- `MiniNvm_Init` 校验：配置表条目数等于 `MININVM_MAX_NUM_BLOCKS`、RAM mirror ≥ 各块 size 之和、`MiniFee_Init` 容量约束满足。
 
 ## 3. OS 集成
 

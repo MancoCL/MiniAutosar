@@ -17,6 +17,7 @@
 #define MININVM_H
 
 #include "Std_Types.h"
+#include "MiniNvm_Cfg.h"
 
 /* ---- 块状态 ---- */
 typedef uint8 MiniNvm_BlockStateType;
@@ -38,16 +39,10 @@ typedef uint8 MiniNvm_ErrorStatusType;
  *        按各块 size 累加计算 ramOffset，镜像填缺省，块状态置 UNINIT。
  *        内部调用 MiniFee_Init(numBlocks) 完成 Flash 扫描恢复。
  *        不触发读盘；读盘由 MiniNvm_ReadAll 完成。
- * \param blockCfg    块配置表数组（每项 size/readAll/writeAll 由集成方指定）
- * \param numBlocks   块数量
- * \param ramMirrorBuf RAM 镜像缓冲（大小须 ≥ 所有块 size 之和）
- * \param ramMirrorSize 缓冲大小（字节）
+ * 配置表和 RAM mirror 由 MiniNvm_Cfg.h 静态提供。
  * \return E_OK / E_NOT_OK
  */
-Std_ReturnType MiniNvm_Init(const MiniNvm_BlockConfigType *blockCfg,
-                            uint16 numBlocks,
-                            uint8 *ramMirrorBuf,
-                            uint16 ramMirrorSize);
+Std_ReturnType MiniNvm_Init(void);
 
 /**
  * \brief 从 RAM 镜像读取块数据（同步，不访问 Flash）。

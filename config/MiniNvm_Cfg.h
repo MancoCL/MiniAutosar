@@ -2,19 +2,27 @@
  * \file MiniNvm_Cfg.h
  * \brief MiniNvm 配置（结构定义 + 常量）
  *
- * 块数量、各块大小均由集成方在启动时通过 MiniNvm_Init 传入，不在头文件中硬编码。
- * 本头文件仅定义块配置结构体、缺省填充字节、以及块数上限（用于模块内部静态数组声明）。
+ * 块 ID、块配置表和 RAM mirror 均由集成方在本头文件中配置。
+ * 枚举末项自动表示块数量，新增块时无需同步维护数量宏。
  */
 #ifndef MININVM_CFG_H
 #define MININVM_CFG_H
 
 #include "Std_Types.h"
 
-/**
- * 块数量上限（用于 dirty/state/error 等静态数组声明）。【假设】
- * 须与 MiniFee_Cfg 的 MINIFEE_MAX_NUM_BLOCKS 一致。
- */
-#define MININVM_MAX_NUM_BLOCKS    ((uint16)64)
+/* ---- 块 ID 与数量（末项必须保持为最后一项） ---- */
+typedef enum
+{
+    MININVM_BLOCK_ID_0 = 0,
+    MININVM_BLOCK_ID_1,
+    MININVM_BLOCK_ID_2,
+    MININVM_BLOCK_ID_3,
+    MININVM_BLOCK_ID_4,
+    MININVM_BLOCK_ID_5,
+    MININVM_BLOCK_ID_6,
+    MININVM_BLOCK_ID_7,
+    MININVM_MAX_NUM_BLOCKS
+} MiniNvm_BlockIdType;
 
 /** 缺省数据填充字节（块无有效页/被擦除时装入 RAM 镜像）。【假设】 */
 #define MININVM_DEFAULT_BYTE       ((uint8)0xFFu)
@@ -32,5 +40,21 @@ typedef struct
     boolean  readAll;   /* 是否参与 ReadAll */
     boolean  writeAll;  /* 是否参与 WriteAll */
 } MiniNvm_BlockConfigType;
+
+/* ---- 集成方配置：新增块时同步增加枚举项和此处条目 ---- */
+#define MININVM_RAM_MIRROR_SIZE   ((uint16)768u)
+
+static const MiniNvm_BlockConfigType MiniNvm_BlockConfig[MININVM_MAX_NUM_BLOCKS] = {
+    {MININVM_BLOCK_ID_0, 0x80u, 0u, TRUE, TRUE},
+    {MININVM_BLOCK_ID_1, 0x40u, 0u, TRUE, TRUE},
+    {MININVM_BLOCK_ID_2, 0xF0u, 0u, TRUE, TRUE},
+    {MININVM_BLOCK_ID_3, 0x20u, 0u, TRUE, TRUE},
+    {MININVM_BLOCK_ID_4, 0x80u, 0u, TRUE, TRUE},
+    {MININVM_BLOCK_ID_5, 0x10u, 0u, TRUE, TRUE},
+    {MININVM_BLOCK_ID_6, 0x60u, 0u, TRUE, TRUE},
+    {MININVM_BLOCK_ID_7, 0x40u, 0u, TRUE, TRUE}
+};
+
+static uint8 MiniNvm_RamMirror[MININVM_RAM_MIRROR_SIZE];
 
 #endif /* MININVM_CFG_H */

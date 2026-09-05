@@ -14,6 +14,7 @@
 #define MINIFEE_CFG_H
 
 #include "Std_Types.h"
+#include "MiniNvm_Cfg.h"
 
 /* ---- Cluster / 页布局（【假设】默认值，须与 Flash 驱动属性对齐） ---- */
 
@@ -39,11 +40,9 @@
 #define MINIFEE_PAGE_DATA_SIZE      ((uint16)(MINIFEE_PAGE_SIZE - 16u))
 
 /**
- * NvM 块数量上限（用于 blockMap 等静态数组声明）。【假设】
- * 实际块数由 MiniFee_Init(numBlocks) 运行时传入，须 ≤ 此值。
- * 须与 MiniNvm_Cfg 的 MININVM_MAX_NUM_BLOCKS 一致。
+ * NvM 块数量由 MiniNvm_Cfg 的块 ID 枚举统一定义。
  */
-#define MINIFEE_MAX_NUM_BLOCKS      ((uint16)64)
+#define MINIFEE_MAX_NUM_BLOCKS      ((uint16)MININVM_MAX_NUM_BLOCKS)
 
 /* ---- CRC 配置（【假设】） ---- */
 

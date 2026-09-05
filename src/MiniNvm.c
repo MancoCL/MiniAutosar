@@ -3,7 +3,7 @@
  * \brief MiniNvm（NVRAM 管理）实现
  *
  * 设计要点（详见 docs/03_mininvm_design.md）：
- *  - 块类型：仅 Native 单副本；块数量与各块大小由集成方在 Init 时传入，不在配置中硬编码。
+ *  - 块类型：仅 Native 单副本；块 ID、数量、大小和 RAM mirror 来自 MiniNvm_Cfg.h。
  *  - RAM 镜像策略（P0 第 13 条）：
  *      * Init：接收集成方块配置表+RAM缓冲，按 size 累加计算 ramOffset，镜像填缺省，状态置 UNINIT。
  *      * ReadAll（上电）：逐块经 MiniFee_ReadBlock 读入镜像，CRC 校验，无效块装缺省并置 INVALID。
@@ -19,10 +19,10 @@
 #include "MiniFee.h"
 #include <string.h>
 
-/* ---- 集成方提供的配置与缓冲（Init 时传入） ---- */
-static const MiniNvm_BlockConfigType *blockTable;
-static uint16 numBlocks;
-static uint8 *ramMirror;
+/* ---- 编译期配置提供的块表与 RAM mirror ---- */
+static const MiniNvm_BlockConfigType *blockTable = MiniNvm_BlockConfig;
+static uint16 numBlocks = (uint16)MININVM_MAX_NUM_BLOCKS;
+static uint8 *ramMirror = MiniNvm_RamMirror;
 static uint16 ramOffsets[MININVM_MAX_NUM_BLOCKS]; /* Init 时按 size 累加计算 */
 
 /* ---- 运行期状态（静态数组，按上限声明） ---- */
@@ -48,34 +48,20 @@ static boolean validBlockId(uint16 blockId)
 
 /* ---- 对外 API ---- */
 
-Std_ReturnType MiniNvm_Init(const MiniNvm_BlockConfigType *blockCfg,
-                            uint16 numBlk,
-                            uint8 *ramMirrorBuf,
-                            uint16 ramMirrorSize)
+Std_ReturnType MiniNvm_Init(void)
 {
     uint16 b;
     uint16 offset = 0u;
 
-    if ((blockCfg == NULL_PTR) || (ramMirrorBuf == NULL_PTR) ||
-        (numBlk == 0u) || (numBlk > MININVM_MAX_NUM_BLOCKS))
-    {
-        inited = FALSE;
-        return E_NOT_OK;
-    }
-
     /* 先初始化 MiniFee（含 Flash 扫描恢复） */
-    if (MiniFee_Init(numBlk) != MINIFEE_OK)
+    if (MiniFee_Init(numBlocks) != MINIFEE_OK)
     {
         inited = FALSE;
         return E_NOT_OK;
     }
-
-    blockTable = blockCfg;
-    numBlocks = numBlk;
-    ramMirror = ramMirrorBuf;
 
     /* 逐块累加 size 计算 RAM 偏移，并初始化镜像/状态 */
-    for (b = 0u; b < numBlk; b++)
+    for (b = 0u; b < numBlocks; b++)
     {
         ramOffsets[b] = offset;
         fillDefault(&ramMirror[offset], blockTable[b].size);
@@ -85,7 +71,7 @@ Std_ReturnType MiniNvm_Init(const MiniNvm_BlockConfigType *blockCfg,
         blockErr[b] = MININVM_ERR_NONE;
     }
     /* 安全校验：RAM 缓冲须覆盖所有块 size 之和 */
-    if (offset > ramMirrorSize)
+    if (offset > MININVM_RAM_MIRROR_SIZE)
     {
         inited = FALSE;
         return E_NOT_OK;

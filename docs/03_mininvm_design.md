@@ -4,7 +4,9 @@
 
 - 见 [config/MiniNvm\_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniNvm_Cfg.h)。
 
-- **块数量与各块大小均不在配置头文件中硬编码**，由集成方在启动时构造配置表数组并传给 `MiniNvm_Init`。
+- 块 ID 与块数量由 `MiniNvm_Cfg.h` 中的 `MiniNvm_BlockIdType` 枚举统一定义；
+  `MININVM_MAX_NUM_BLOCKS` 是枚举末项，表示块数量。集成方新增枚举项后，块数量和
+  MiniNvm/MiniFee 的静态数组上限自动递增。
 
 ```c
 typedef struct {
@@ -16,13 +18,12 @@ typedef struct {
 } MiniNvm_BlockConfigType;
 ```
 
-- 集成方在启动时构造 `MiniNvm_BlockConfigType cfg[N]` 数组（逐块指定 `size`/`readAll`/`writeAll`），连同 RAM 镜像缓冲一起传入：
-  ```c
-  MiniNvm_Init(cfg, N, ramBuf, sizeof(ramBuf));
-  ```
-- `MiniNvm_Init` 内部按各块 `size` 累加计算 `ramOffsets[]`，校验总和不超过传入的 RAM 缓冲大小。
+- 集成方在 `MiniNvm_Cfg.h` 的 `MiniNvm_BlockConfig` 数组中逐块指定
+  `size`/`readAll`/`writeAll`，并在同一配置头中按总大小创建 `MiniNvm_RamMirror` 静态数组。
+- `MiniNvm_Init(void)` 直接使用该配置表和 mirror，按各块 `size` 累加计算 `ramOffsets[]`，
+  并校验配置表条目和 mirror 容量。
 - `MiniNvm_GetBlockSize(blockId)` / `MiniNvm_GetNumBlocks()` 供调用方查询实际块大小与块数。
-- `MININVM_MAX_NUM_BLOCKS`（= 64）仅用于模块内部 `dirty`/`blockState`/`blockErr` 静态数组声明上限，不限制集成方的实际块数。
+- `MININVM_MAX_NUM_BLOCKS` 同时是枚举计数、配置表长度和模块内部静态数组长度；不再运行时传入块数。
 
 ### Flash 占用估算（给定页大小）
 
@@ -36,7 +37,7 @@ typedef struct {
 
 ### 2.1 上电 Init + ReadAll
 
-- `Init(blockCfg, numBlocks, ramBuf, ramSize)`：接收集成方块配置表+RAM缓冲，按 `size` 累加计算 `ramOffsets[]`，镜像填缺省（`MININVM_DEFAULT_BYTE=0xFF`），块置 `UNINIT`；调 `MiniFee_Init(numBlocks)` 完成扫描恢复。
+- `Init(void)`：使用配置头中的块配置表和 RAM mirror，按 `size` 累加计算 `ramOffsets[]`，镜像填缺省（`MININVM_DEFAULT_BYTE=0xFF`），块置 `UNINIT`；调 `MiniFee_Init(MININVM_MAX_NUM_BLOCKS)` 完成扫描恢复。
 
 - `ReadAll`（见 [src/MiniNvm.c](file:///d:/WorkSpace/MiniAutosar/src/MiniNvm.c)）：逐块（readAll=TRUE）`MiniFee_ReadBlock(id, mirror, &len)`：
 
