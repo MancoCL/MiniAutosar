@@ -56,11 +56,12 @@
 
 | API | 语义 | 返回 |
 |---|---|---|
-| `MiniFee_Init(numBlocks)` | 校验 numBlocks（<pagesPerCluster）与 Flash 属性↔配置一致；扫描重建块→页映射。 | MINIFEE_OK / ERR_FLASH / ERR_PARAM |
-| `MiniFee_ReadBlock(blockId, dest, &len)` | 读块最新有效页+CRC。无页→NOT_FOUND；损坏→CRC。 | MINIFEE_OK / NOT_FOUND / CRC / FLASH / PARAM |
-| `MiniFee_WriteBlock(blockId, src, len)` | 分配新页→写头+数据+CRC→提交 VALID→作废旧页；写满触发 GC。 | OK / PARAM / FULL / FLASH |
-| `MiniFee_EraseBlock(blockId)` | 作废该块有效页（幂等）。 | OK / PARAM / FLASH |
-| `MiniFee_GetPageDataSize(void)` | 页数据区大小。 | uint16 |
+| `MiniFee_Init(blockSizes, numBlocks)` | 校验逐块 size（PAGE_SIZE 整数倍、≤MAX_BLOCK_SIZE）与 Flash 属性↔配置一致；扫描重建块→槽映射。 | MINIFEE_OK / ERR_FLASH / ERR_PARAM |
+| `MiniFee_ReadBlock(blockId, dest, &len)` | 读块最新有效槽+CRC。无槽/墓碑→NOT_FOUND；损坏→CRC。 | MINIFEE_OK / NOT_FOUND / CRC / FLASH / PARAM |
+| `MiniFee_WriteBlock(blockId, src, len)` | 在写游标处追加新槽：header 页→数据页→提交页（整页写）；放不下触发 GC；不作废旧槽（seq 竞争+GC 回收）。 | OK / PARAM / FULL / FLASH |
+| `MiniFee_EraseBlock(blockId)` | 写墓碑槽（dataLen=0，幂等）。 | OK / PARAM / FLASH |
+| `MiniFee_GetBlockDataSize(blockId)` | 该块槽数据区大小（= Init 传入的该块 size）。 | uint16 |
+| `MiniFee_GetWritePageSize(void)` | 物理写页大小（= MINIFEE_PAGE_SIZE）。 | uint16 |
 | `MiniFee_GetClusterCount(void)` | cluster 数。 | uint16 |
 
 ## 4. FlashDrv 抽象层接口
@@ -71,11 +72,11 @@
 |---|---|
 | `FlashDrv_Init` | 初始化驱动 |
 | `FlashDrv_Read(addr, len, dest)` | 读 |
-| `FlashDrv_Write(addr, len, src)` | 页编程；只能 1→0，否则 FLASH_ERR_PROG |
+| `FlashDrv_Write(addr, len, src)` | 页编程；地址/长度须按 pageSize（物理最小编程单元）对齐；只能 1→0，否则 FLASH_ERR_PROG |
 | `FlashDrv_EraseCluster(clusterIdx)` | 擦除整 cluster（置 0xFF） |
 | `FlashDrv_GetProperty(&prop)` | 查询 pageSize/clusterSize/clusterCount/totalCapacity/writeGranularity/eraseAtomicity |
 
-地址模型：Fee 管理区为扁平空间 `[0, totalCapacity)`；cluster i 基址 = `i*clusterSize`，页 j 基址 = `clusterBase + j*pageSize`。
+地址模型：Fee 管理区为扁平空间 `[0, totalCapacity)`；cluster i 基址 = `i*clusterSize`，页 j 基址 = `clusterBase + j*pageSize`；块 b 的槽 = 连续 `blockPages[b] = size/pageSize + 2` 页（不跨 cluster），槽内 [header 页][数据页…][提交页]（详见 [02\_minifee\_design.md](file:///d:/WorkSpace/MiniAutosar/docs/02_minifee_design.md) §2）。
 
 ## 5. 错误码体系与传播路径
 
@@ -94,8 +95,8 @@ FLASH_ERR_ERASE     ─→   MINIFEE_ERR_FLASH   ─→   ERR_ERASE
 
 ## 6. 配置框架（总体，细节见 04）
 
-- [config/MiniFee_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniFee_Cfg.h)：cluster 数、页大小、cluster 大小、CRC 类型与多项式、页头字段魔数/状态字、GC 阈值。
-- [config/MiniNvm_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniNvm_Cfg.h)：块 ID 枚举（末项为块数）、块大小、RAM mirror 总容量、缺省字节、静态块配置表和静态 RAM mirror。
+- [config/MiniFee_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniFee_Cfg.h)：cluster 数、cluster 大小、**页大小（=物理最小编程字节数）**、单块数据上限、CRC 类型与多项式、页头字段魔数/状态字、GC 阈值。
+- [config/MiniNvm_Cfg.h](file:///d:/WorkSpace/MiniAutosar/config/MiniNvm_Cfg.h)：块 ID 枚举（末项为块数）、块大小（须为 MINIFEE_PAGE_SIZE 整数倍）、RAM mirror 总容量、缺省字节、静态块配置表和静态 RAM mirror。
 - 所有量化参数为编译期宏（【假设】占位默认值），禁止运行时动态配置；`MiniFee_Init` 校验配置↔FlashDrv 属性一致性（P4 对齐要求）。
 
 ## 7. RAM 镜像策略时序

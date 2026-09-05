@@ -11,7 +11,7 @@
 ```c
 typedef struct {
     uint16  id;        // 块 ID（= 索引）
-    uint16  size;      // 块大小（逐块指定，须 ≤ MINIFEE_PAGE_DATA_SIZE）
+    uint16  size;      // 块大小（逐块指定，须为 MINIFEE_PAGE_SIZE 整数倍且 ≤ MINIFEE_MAX_BLOCK_SIZE）
     uint16  ramOffset; // RAM 镜像偏移（填 0，Init 时按 size 累加计算）
     boolean readAll;  // 参与 ReadAll
     boolean writeAll; // 参与 WriteAll
@@ -28,17 +28,19 @@ typedef struct {
 
 ### Flash 占用估算（给定页大小）
 
-- 页数据区 = `PAGE_SIZE-16 = 240`，各块 `size` 须 ≤ 此值。
+- 块 b 的 Fee 槽 = `size/PAGE_SIZE + 2` 页（header 1 + 数据 size/PAGE_SIZE + 提交 1，见 [02\_minifee\_design.md](file:///d:/WorkSpace/MiniAutosar/docs/02_minifee_design.md) §1/§2）。
 
-- N 块各占 1 页 → N 页数据。`pagesPerCluster=32`，须 `N < 32`，单 cluster 容纳全部 live 块 + 空闲。
+- 当前块表（8 块，size 均为 8 的倍数）：数据页合计 96 + 开销页 16 = 槽页合计 112，最大单槽 32 页（块 2，size=0xF0）。
 
-- 总容量 `4 × 8192 = 32 KB`，余量充足。
+- 容量约束 `ΣblockPages + max(blockPages) <= pagesPerCluster`（112+32=144 ≤ 8192/8=1024，满足）。
+
+- 总容量 `2 × 8192 = 16 KB`，余量充足。
 
 ## 2. RAM 镜像与写回
 
 ### 2.1 上电 Init + ReadAll
 
-- `Init(void)`：使用配置头中的块配置表和 RAM mirror，按 `size` 累加计算 `ramOffsets[]`，镜像填缺省（`MININVM_DEFAULT_BYTE=0xFF`），块置 `UNINIT`；调 `MiniFee_Init(MININVM_MAX_NUM_BLOCKS)` 完成扫描恢复。
+- `Init(void)`：使用配置头中的块配置表和 RAM mirror，按 `size` 累加计算 `ramOffsets[]`，镜像填缺省（`MININVM_DEFAULT_BYTE=0xFF`），块置 `UNINIT`；构建逐块 size 数组调 `MiniFee_Init(sizes, MININVM_MAX_NUM_BLOCKS)` 完成扫描恢复（MiniFee 校验每块 size 为 PAGE_SIZE 整数倍且 ≤ MAX_BLOCK_SIZE）。
 
 - `ReadAll`（见 [src/MiniNvm.c](file:///d:/WorkSpace/MiniAutosar/src/MiniNvm.c)）：逐块（readAll=TRUE）`MiniFee_ReadBlock(id, mirror, &len)`：
 
@@ -86,9 +88,9 @@ typedef struct {
 
 - 仅 Native（P0 #12）：镜像置缺省 + dirty + 状态 `INVALID`。
 
-- 真正"擦 Flash 页"（作废 MiniFee 页）发生在 WriteAll（INVALID+dirty → `MiniFee_EraseBlock`）。
+- 真正"擦 Flash"（MiniFee 写墓碑槽，dataLen=0）发生在 WriteAll（INVALID+dirty → `MiniFee_EraseBlock`）。
 
-- 幂等语义：对未写块 EraseNvBlock 后 WriteAll，`MiniFee_EraseBlock` 因无有效页返回 OK。
+- 幂等语义：对未写块 EraseNvBlock 后 WriteAll，`MiniFee_EraseBlock` 因无映射槽返回 OK；对已墓碑块再擦直接 OK 不再写。
 
 ## 5. 状态与错误
 
@@ -105,10 +107,10 @@ typedef struct {
 
 | 操作                      | MiniNvm             | → MiniFee | → FlashDrv  |
 | ----------------------- | ------------------- | --------- | ----------- |
-| Init                    | MiniFee\_Init       | 扫描        | Read        |
-| ReadAll(每块)             | MiniFee\_ReadBlock  | 读页+校验     | Read        |
-| WriteAll(VALID dirty)   | MiniFee\_WriteBlock | 写页/GC     | Write/Erase |
-| WriteAll(INVALID dirty) | MiniFee\_EraseBlock | 作废页       | Write       |
+| Init                    | MiniFee\_Init（构建逐块 size 数组传入） | 扫描        | Read        |
+| ReadAll(每块)             | MiniFee\_ReadBlock  | 读槽+校验     | Read        |
+| WriteAll(VALID dirty)   | MiniFee\_WriteBlock | 写槽/GC     | Write/Erase |
+| WriteAll(INVALID dirty) | MiniFee\_EraseBlock | 写墓碑槽     | Write       |
 | 运行期 WriteBlock/Erase    | （不调 MiniFee）        | —         | —           |
 
 失败传播：MiniFee 返回码 → MiniNvm 块错误标志，dirty 保留。

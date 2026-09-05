@@ -13,9 +13,9 @@
 #include "MiniFee_Cfg.h"
 #include <string.h>
 
-/** 测试读写缓冲（按页数据区大小 = 块大小上限）。 */
-static uint8 wbuf[MINIFEE_PAGE_DATA_SIZE];
-static uint8 rbuf[MINIFEE_PAGE_DATA_SIZE];
+/** 测试读写缓冲（按单块数据上限 = MINIFEE_MAX_BLOCK_SIZE）。 */
+static uint8 wbuf[MINIFEE_MAX_BLOCK_SIZE];
+static uint8 rbuf[MINIFEE_MAX_BLOCK_SIZE];
 
 /**
  * \brief 便捷初始化包装：全新首启（Stub_Reset 整片擦除）+ MiniNvm_Init + ReadAll。
@@ -116,8 +116,9 @@ static void tc_crc_error_status(void)
     pat(wbuf, sz, 0xD3);
     (void)MiniNvm_WriteBlock(2u, wbuf);
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll");
-    /* 破坏块 2 的数据区首字节（首个写块位于地址 0 的数据区 offset 10） */
-    FlashDrv_Stub_SetByte(10u, (uint8)(FlashDrv_Stub_GetByte(10u) ^ 0xFFu));
+    /* 破坏块 2 槽数据区首字节（首个写块槽位于地址 0，数据区起始 = 槽 base + PAGE_SIZE） */
+    FlashDrv_Stub_SetByte(MINIFEE_PAGE_SIZE,
+                          (uint8)(FlashDrv_Stub_GetByte(MINIFEE_PAGE_SIZE) ^ 0xFFu));
     /* 重启 ReadAll 应识别为 CRC 错误（不调 Reset，保留破坏的字节） */
     (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();

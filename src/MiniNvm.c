@@ -22,6 +22,7 @@ static const MiniNvm_BlockConfigType *blockTable = MiniNvm_BlockConfig;
 static uint16 numBlocks = (uint16)MININVM_MAX_NUM_BLOCKS;
 static uint8 *ramMirror = MiniNvm_RamMirror;
 static uint16 ramOffsets[MININVM_MAX_NUM_BLOCKS]; /* Init 时按 size 累加计算 */
+static uint16 feeSizes[MININVM_MAX_NUM_BLOCKS];   /* 传给 MiniFee_Init 的逐块 size 数组 */
 
 /* ---- 运行期状态（静态数组，按上限声明） ---- */
 static boolean                  dirty[MININVM_MAX_NUM_BLOCKS];
@@ -57,8 +58,9 @@ static boolean validBlockId(uint16 blockId)
 /* ---- 对外 API ---- */
 
 /**
- * \brief 初始化：先 MiniFee_Init（含 Flash 扫描恢复），再逐块累加 size 计算 ramOffset、
- *        镜像填缺省、状态置 UNINIT，最后校验镜像容量覆盖 size 总和。
+ * \brief 初始化：先构建逐块 size 数组调 MiniFee_Init（含块表校验与 Flash 扫描恢复），
+ *        再逐块累加 size 计算 ramOffset、镜像填缺省、状态置 UNINIT，
+ *        最后校验镜像容量覆盖 size 总和。
  * \req P0 #15、TC-N-01
  */
 Std_ReturnType MiniNvm_Init(void)
@@ -66,8 +68,12 @@ Std_ReturnType MiniNvm_Init(void)
     uint16 b;
     uint16 offset = 0u;
 
-    /* 先初始化 MiniFee（含 Flash 扫描恢复） */
-    if (MiniFee_Init(numBlocks) != MINIFEE_OK)
+    /* 先初始化 MiniFee（逐块 size 数组传入，含 PAGE_SIZE 整数倍等校验与扫描恢复） */
+    for (b = 0u; b < numBlocks; b++)
+    {
+        feeSizes[b] = blockTable[b].size;
+    }
+    if (MiniFee_Init(feeSizes, numBlocks) != MINIFEE_OK)
     {
         inited = FALSE;
         return E_NOT_OK;

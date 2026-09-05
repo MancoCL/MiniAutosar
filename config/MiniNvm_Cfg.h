@@ -38,7 +38,7 @@ typedef enum
 typedef struct
 {
     uint16   id;        /* 块 ID（= 索引） */
-    uint16   size;      /* 块大小（逐块指定，须 ≤ MINIFEE_PAGE_DATA_SIZE） */
+    uint16   size;      /* 块大小（逐块指定，须为 MINIFEE_PAGE_SIZE 整数倍且 ≤ MINIFEE_MAX_BLOCK_SIZE） */
     uint16   ramOffset; /* RAM 镜像偏移（填 0，Init 时计算） */
     boolean  readAll;   /* 是否参与 ReadAll */
     boolean  writeAll;  /* 是否参与 WriteAll */

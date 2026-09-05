@@ -33,7 +33,7 @@ typedef uint8 FlashDrv_ReturnType;
 /* ---- Flash 属性 ---- */
 typedef struct
 {
-    uint32 pageSize;        /* 单页编程粒度（字节）【假设：与 MiniFee_Cfg 对齐】 */
+    uint32 pageSize;        /* 单页编程粒度（字节）= 物理 Flash 最小编程字节数【假设：与 MiniFee_Cfg 对齐】 */
     uint32 clusterSize;     /* 单 cluster 大小 = 擦除单元大小（字节） */
     uint32 clusterCount;    /* cluster 数量 */
     uint32 totalCapacity;   /* 总容量 = clusterSize * clusterCount */
@@ -62,10 +62,11 @@ FlashDrv_ReturnType FlashDrv_Read(uint32 addr, uint16 len, uint8 *dest);
 /**
  * \brief 向 Flash 编程（写）。
  * \details 目标区必须处于擦除态（位为 1）；只允许 1→0，尝试 0→1 返回 FLASH_ERR_PROG。
- * \param[in] addr 起始字节地址
- * \param[in] len  写入字节数
+ *          写地址与长度须按 pageSize（物理最小编程单元）对齐，违反返回 FLASH_ERR_PARAM。
+ * \param[in] addr 起始字节地址（pageSize 对齐）
+ * \param[in] len  写入字节数（pageSize 的整数倍）
  * \param[in] src  源数据
- * \return FLASH_OK：成功；FLASH_ERR_PARAM：参数非法；FLASH_ERR_PROG：违反 1→0 写约束；FLASH_ERR_BOUNDARY：越界；FLASH_ERR_FAIL：其它失败。
+ * \return FLASH_OK：成功；FLASH_ERR_PARAM：参数非法/未按 pageSize 对齐；FLASH_ERR_PROG：违反 1→0 写约束；FLASH_ERR_BOUNDARY：越界；FLASH_ERR_FAIL：其它失败。
  */
 FlashDrv_ReturnType FlashDrv_Write(uint32 addr, uint16 len, const uint8 *src);
 

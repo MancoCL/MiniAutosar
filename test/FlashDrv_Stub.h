@@ -31,7 +31,9 @@ uint8 FlashDrv_Stub_GetByte(uint32 addr);
 void FlashDrv_Stub_SetByte(uint32 addr, uint8 val);
 
 /**
- * \brief 令接下来 n 次 status 写（2 字节写）失败，模拟"提交前掉电"。
+ * \brief 令接下来 n 次提交页写失败，模拟"提交前掉电"。
+ * \details 识别约定：整页写（len == MINIFEE_PAGE_SIZE）且首 2 字节为 0x55 0x55
+ *          （提交页 status=VALID 特征）的写视为提交页写。
  * \param[in] n 失败次数
  */
 void FlashDrv_Stub_FailStatusWrites(uint8 n);

@@ -2,7 +2,8 @@
  * \file FlashDrv_Stub.c
  * \brief Flash 驱动 RAM stub 实现（仅宿主测试用）
  * \details 用静态 RAM 数组模拟 Fee 管理区，遵循 Flash 写约束（只能 1→0，擦除恢复 0xFF）；
- *          提供故障注入：status 写失败（模拟提交前掉电）、任意写失败、擦除失败。
+ *          写操作强制按 MINIFEE_PAGE_SIZE（物理最小编程单元）对齐与整数倍长度；
+ *          提供故障注入：提交页写失败（模拟提交前掉电）、任意写失败、擦除失败。
  *
  *          FlashDrv_Init 不擦除 Flash（模拟真实芯片上电不擦除），由 FlashDrv_Stub_Reset
  *          负责整片擦除——可在"掉电"后再次调用 MiniFee_Init/MiniNvm_Init 触发恢复流程
@@ -88,8 +89,9 @@ FlashDrv_ReturnType FlashDrv_Read(uint32 addr, uint16 len, uint8 *dest)
     return FLASH_OK;
 }
 
-/** \brief 实现：故障注入优先匹配（2 字节写视为 status 写）；逐位校验 1→0，
- *          违反 → PROG，通过则按 old&new 落盘。 */
+/** \brief 实现：故障注入优先匹配（整页写且首 2 字节为 0x55 0x55 视为提交页写）；
+ *          校验写地址/长度按 MINIFEE_PAGE_SIZE 对齐（物理最小编程单元模拟），
+ *          逐位校验 1→0，违反 → PROG，通过则按 old&new 落盘。 */
 FlashDrv_ReturnType FlashDrv_Write(uint32 addr, uint16 len, const uint8 *src)
 {
     uint16 i;
@@ -101,9 +103,16 @@ FlashDrv_ReturnType FlashDrv_Write(uint32 addr, uint16 len, const uint8 *src)
     {
         return FLASH_ERR_BOUNDARY;
     }
+    /* 物理最小编程单元模拟：写地址与长度均须按 MINIFEE_PAGE_SIZE 对齐 */
+    if (((addr % (uint32)MINIFEE_PAGE_SIZE) != 0u) ||
+        (((uint32)len % (uint32)MINIFEE_PAGE_SIZE) != 0u))
+    {
+        return FLASH_ERR_PARAM;
+    }
 
-    /* 故障注入：2 字节写视为 status 写（提交/作废），优先匹配 */
-    if ((len == 2u) && (failStatusWritesLeft > 0u))
+    /* 故障注入：整页写且首 2 字节 = 0x55 0x55 视为提交页写（status=VALID 特征），优先匹配 */
+    if ((len == MINIFEE_PAGE_SIZE) && (src[0] == 0x55u) && (src[1] == 0x55u) &&
+        (failStatusWritesLeft > 0u))
     {
         failStatusWritesLeft--;
         return FLASH_ERR_FAIL; /* 模拟提交前掉电 */
@@ -150,7 +159,7 @@ FlashDrv_ReturnType FlashDrv_EraseCluster(uint8 clusterIdx)
     return FLASH_OK;
 }
 
-/** \brief 实现：返回与 MiniFee_Cfg.h 配置对齐的属性（写粒度 1 字节、cluster 原子擦除）。 */
+/** \brief 实现：返回与 MiniFee_Cfg.h 配置对齐的属性（写粒度 = MINIFEE_PAGE_SIZE、cluster 原子擦除）。 */
 FlashDrv_ReturnType FlashDrv_GetProperty(FlashDrv_PropertyType *prop)
 {
     if (prop == NULL_PTR)
@@ -161,7 +170,7 @@ FlashDrv_ReturnType FlashDrv_GetProperty(FlashDrv_PropertyType *prop)
     prop->clusterSize      = (uint32)MINIFEE_CLUSTER_SIZE;
     prop->clusterCount     = (uint32)MINIFEE_CLUSTER_NUM;
     prop->totalCapacity     = (uint32)MINIFEE_TOTAL_CAPACITY;
-    prop->writeGranularity  = 1u;
+    prop->writeGranularity  = (uint32)MINIFEE_PAGE_SIZE;
     prop->eraseAtomicity    = TRUE;
     return FLASH_OK;
 }
