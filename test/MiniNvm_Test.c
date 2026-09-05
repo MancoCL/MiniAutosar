@@ -74,8 +74,7 @@ static void tc_writeall_persist(void)
     pat(wbuf, sz, 0xB1);
     CHECK(MiniNvm_WriteBlock(0u, wbuf) == E_OK, "WriteBlock 0");
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll");
-    /* 模拟重启 */
-    FlashDrv_Stub_Reset();
+    /* 模拟重启：不调 FlashDrv_Stub_Reset（会整片擦除），直接再 Init+ReadAll */
     CHECK(MiniNvm_Init() == E_OK, "reboot Init");
     CHECK(MiniNvm_ReadAll() == E_OK, "reboot ReadAll");
     CHECK(MiniNvm_ReadBlock(0u, rbuf) == E_OK, "read back after reboot");
@@ -94,8 +93,7 @@ static void tc_erase_then_writeall(void)
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll #1");
     CHECK(MiniNvm_EraseNvBlock(1u) == E_OK, "EraseNvBlock");
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll #2 (erase)");
-    /* 重启后块 1 应为 NOT_FOUND */
-    FlashDrv_Stub_Reset();
+    /* 重启后块 1 应为 NOT_FOUND（不调 Reset，保留 Flash 内容） */
     (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();
     CHECK(MiniNvm_ReadBlock(1u, rbuf) == E_NOT_OK, "erased block -> E_NOT_OK after reboot");
@@ -112,8 +110,7 @@ static void tc_crc_error_status(void)
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll");
     /* 破坏块 2 的数据区首字节（首个写块位于地址 0 的数据区 offset 10） */
     FlashDrv_Stub_SetByte(10u, (uint8)(FlashDrv_Stub_GetByte(10u) ^ 0xFFu));
-    /* 重启 ReadAll 应识别为 CRC 错误 */
-    FlashDrv_Stub_Reset();
+    /* 重启 ReadAll 应识别为 CRC 错误（不调 Reset，保留破坏的字节） */
     (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();
     {
@@ -161,7 +158,7 @@ static void tc_multi_block(void)
         CHECK(MiniNvm_WriteBlock((uint16)k, wbuf) == E_OK, "WriteBlock multi");
     }
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll multi");
-    FlashDrv_Stub_Reset();
+    /* 模拟重启：不调 Reset，保留 Flash 内容 */
     (void)MiniNvm_Init();
     (void)MiniNvm_ReadAll();
     for (k = 0; k < 5; k++)

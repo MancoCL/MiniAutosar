@@ -62,6 +62,5 @@ gcc -std=c99 -Wall -Wextra -Iinclude -Iconfig -Itest src/*.c test/*.c -o t && ./
 
 ## 已知坑
 
-- `docs/05_test_plan.md` TC-N-01 的 `Init(cfg,8,ram)` 是旧签名：现行 `MiniNvm_Init(void)`，块配置表与 RAM 镜像静态定义在 `config/MiniNvm_Cfg.h`；块数经 `MiniFee_Init(numBlocks)` 运行时传入。
 - `MiniNvm_Cfg.h` 在头文件内定义 `static` 数组（配置表 + RAM 镜像），随 `MiniNvm.h` 传播到每个包含者，各 TU 持有独立副本；MiniNvm API 实际使用 `MiniNvm.c` 内那份。
-- 测试 stub：`FlashDrv_Init` 不擦除（RAM 模拟 Flash 内容跨"重启"保留，用于掉电恢复测试）；全新首启必须先调 `FlashDrv_Stub_Reset()`。故障注入：`FlashDrv_Stub_FailStatusWrites/FailAnyWrites/FailErases`；破坏/检视字节：`SetByte/GetByte`。
+- 测试 stub：`FlashDrv_Init` 不擦除，RAM 模拟 Flash 内容跨"重启"自然保留——模拟重启/掉电就是直接再调 `MiniNvm_Init`（或 `MiniFee_Init`），不要调 `FlashDrv_Stub_Reset()`（那会整片置 0xFF，仅用于全新首启）。故障注入：`FlashDrv_Stub_FailStatusWrites/FailAnyWrites/FailErases`；破坏/检视字节：`SetByte/GetByte`。

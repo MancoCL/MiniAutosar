@@ -56,7 +56,7 @@
 
 | API | 语义 | 返回 |
 |---|---|---|
-| `MiniFee_Init(void)` | 校验 Flash 属性↔配置一致；扫描重建块→页映射。 | MINIFEE_OK / ERR_FLASH / ERR_PARAM |
+| `MiniFee_Init(numBlocks)` | 校验 numBlocks（<pagesPerCluster）与 Flash 属性↔配置一致；扫描重建块→页映射。 | MINIFEE_OK / ERR_FLASH / ERR_PARAM |
 | `MiniFee_ReadBlock(blockId, dest, &len)` | 读块最新有效页+CRC。无页→NOT_FOUND；损坏→CRC。 | MINIFEE_OK / NOT_FOUND / CRC / FLASH / PARAM |
 | `MiniFee_WriteBlock(blockId, src, len)` | 分配新页→写头+数据+CRC→提交 VALID→作废旧页；写满触发 GC。 | OK / PARAM / FULL / FLASH |
 | `MiniFee_EraseBlock(blockId)` | 作废该块有效页（幂等）。 | OK / PARAM / FLASH |

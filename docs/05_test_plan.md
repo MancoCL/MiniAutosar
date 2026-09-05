@@ -9,8 +9,9 @@
   - `FlashDrv_Stub_FailErases(n)`：擦除失败。
   - `FlashDrv_Stub_SetByte/GetByte`：绕过约束注入损坏/检视。
 - **掉电注入**：通过 `FailStatusWrites(1)` 在提交步失败并再次 `MiniFee_Init` 模拟重启恢复。
+- **重启模拟**：不调 `FlashDrv_Stub_Reset`（整片置 0xFF，仅用于全新首启）；直接再次 `MiniFee_Init` 或 `MiniNvm_Init`+`ReadAll` 即为一次"重启"，Flash 内容保留（TC-N-03/04/05/07 的"重启"均为此语义）。
 - **CRC 工具**：直接调用 `MiniFee_CalcCrc`（静态）经破坏对比验证；通过 `SetByte` 破坏数据触发。
-- **运行**：`make`（gcc）。无 gcc 时可手动 `gcc -std=c99 -Wall -Wextra -Iinclude -Iconfig -Itest src/*.c test/*.c -o t && ./t`。
+- **运行**：`make`（gcc）。无 make 时可手动 `gcc -std=c99 -Wall -Wextra -Iinclude -Iconfig -Itest src/*.c test/*.c -o t && ./t`。
 
 ## 2. MiniFee 测试用例（[test/MiniFee_Test.c](file:///d:/WorkSpace/MiniAutosar/test/MiniFee_Test.c)）
 
@@ -31,7 +32,7 @@
 
 | 编号 | 前置 | 步骤 | 预期 | 覆盖 P0 |
 |---|---|---|---|---|
-| TC-N-01 | 全 0xFF | Init(cfg,8,ram)→ReadBlock(0)→GetErrorStatus→ReadAll→ReadBlock(0) | 未 ReadAll 返回 E_NOT_OK+UNINIT；ReadAll 后 INVALID | #11,#13 |
+| TC-N-01 | 全 0xFF | Init()→ReadBlock(0)→GetErrorStatus→ReadAll→ReadBlock(0) | 未 ReadAll 返回 E_NOT_OK+UNINIT；ReadAll 后 INVALID | #11,#13 |
 | TC-N-02 | Init+ReadAll | WriteBlock(0)→ReadBlock(0)→MiniFee_ReadBlock(0) | RAM 一致；Flash 未写（NOT_FOUND） | #13 |
 | TC-N-03 | Init+ReadAll | WriteBlock(0)→WriteAll→重启 Init+ReadAll→ReadBlock(0) | 值跨重启保持 | #13 |
 | TC-N-04 | 写过块1 | EraseNvBlock(1)→WriteAll→重启 Init+ReadAll→ReadBlock(1) | E_NOT_OK（已擦） | #11 |
@@ -39,7 +40,7 @@
 | TC-N-06 | 写块0/1 | FailAnyWrites(1)→WriteAll→GetErrorStatus(0)→再 WriteAll | E_NOT_OK+ERR_WRITE；重试 E_OK | #11 |
 | TC-N-07 | Init+ReadAll | 写 5 块→WriteAll→重启→读 5 块 | 全部一致（变长 size） | #13,#15 |
 | TC-N-08 | Init | GetBlockSize(0/1/2)+GetNumBlocks | 各块 size 正确；块数=8 | #15 |
-| TC-N-09 | Init | Init(NULL/0/>MAX/RAM不足) | E_NOT_OK | — |
+| TC-N-09 | 全 0xFF | Reset+Init()→GetNumBlocks | Init E_OK；块数=MININVM_MAX_NUM_BLOCKS（配置表与 RAM 镜像由 MiniNvm_Cfg.h 静态提供） | — |
 
 ## 4. 覆盖追溯
 
