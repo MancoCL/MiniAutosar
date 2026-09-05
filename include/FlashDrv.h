@@ -1,20 +1,20 @@
 /**
  * \file FlashDrv.h
  * \brief Flash 驱动抽象层接口（平台无关）
+ * \details 屏蔽底层 Flash 硬件差异，向上（MiniFee）提供统一的读/写/擦/属性查询接口。
+ *          真实目标板由移植方实现 FlashDrv_xxx；宿主机测试由 test/FlashDrv_Stub.c 实现。
  *
- * 屏蔽底层 Flash 硬件差异，向上（MiniFee）提供统一的读/写/擦/属性查询接口。
- * 真实目标板由移植方实现 FlashDrv_xxx；宿主机测试由 test/FlashDrv_Stub.c 实现。
+ *          地址模型：Fee 管理区为一段扁平地址空间 [0, totalCapacity)。
+ *          - cluster i 的基地址 = i * clusterSize；
+ *          - cluster 内 page j 的基地址 = clusterBase + j * pageSize；
+ *          - 所有地址均为该扁平空间内的字节偏移。
  *
- * 地址模型：Fee 管理区为一段扁平地址空间 [0, totalCapacity)。
- *   - cluster i 的基地址 = i * clusterSize
- *   - cluster 内 page j 的基地址 = clusterBase + j * pageSize
- *   - 所有地址均为该扁平空间内的字节偏移。
+ *          Flash 写约束：只能把 1 写成 0（擦除后恢复为 0xFF）。
+ *          - FlashDrv_Write 不得将某位由 0 改为 1，否则返回 FLASH_ERR_PROG；
+ *          - FlashDrv_EraseCluster 将整 cluster 置为 0xFF。
  *
- * Flash 写约束：只能把 1 写成 0（擦除后恢复为 0xFF）。
- *   - FlashDrv_Write 不得将某位由 0 改为 1，否则返回 FLASH_ERR_PROG。
- *   - FlashDrv_EraseCluster 将整 cluster 置为 0xFF。
- *
- * 全部同步语义：函数返回即代表操作完成。
+ *          全部同步语义：函数返回即代表操作完成。
+ * \req P0 #2（平台无关 + Flash 抽象）、P0 #18（底层仅抽象必要操作）
  */
 #ifndef FLASHDRV_H
 #define FLASHDRV_H
@@ -45,40 +45,42 @@ typedef struct
 
 /**
  * \brief 初始化 Flash 驱动。
- * \return FLASH_OK / FLASH_ERR_FAIL
+ * \details 每次上电首先调用；不擦除、不改动 Flash 内容。
+ * \return FLASH_OK：成功；FLASH_ERR_FAIL：初始化失败。
  */
 FlashDrv_ReturnType FlashDrv_Init(void);
 
 /**
- * \brief 从 Fee 区读取数据。
- * \param addr 起始字节地址
- * \param len  字节数
- * \param dest 目标缓冲（调用方提供，>= len）
- * \return FLASH_OK / FLASH_ERR_PARAM / FLASH_ERR_BOUNDARY / FLASH_ERR_FAIL
+ * \brief 从 Fee 管理区读取数据。
+ * \param[in] addr 起始字节地址（扁平空间 [0, totalCapacity)）
+ * \param[in] len  读取字节数
+ * \param[out] dest 目标缓冲（调用方提供，容量 >= len）
+ * \return FLASH_OK：成功；FLASH_ERR_PARAM：参数非法；FLASH_ERR_BOUNDARY：越界；FLASH_ERR_FAIL：其它失败。
  */
 FlashDrv_ReturnType FlashDrv_Read(uint32 addr, uint16 len, uint8 *dest);
 
 /**
- * \brief 向 Flash 编程（写）。目标区必须先擦除（位为 1）。
- *        只允许 1→0；尝试 0→1 返回 FLASH_ERR_PROG。
- * \param addr 起始字节地址
- * \param len  字节数
- * \param src  源数据
- * \return FLASH_OK / FLASH_ERR_PARAM / FLASH_ERR_PROG / FLASH_ERR_BOUNDARY / FLASH_ERR_FAIL
+ * \brief 向 Flash 编程（写）。
+ * \details 目标区必须处于擦除态（位为 1）；只允许 1→0，尝试 0→1 返回 FLASH_ERR_PROG。
+ * \param[in] addr 起始字节地址
+ * \param[in] len  写入字节数
+ * \param[in] src  源数据
+ * \return FLASH_OK：成功；FLASH_ERR_PARAM：参数非法；FLASH_ERR_PROG：违反 1→0 写约束；FLASH_ERR_BOUNDARY：越界；FLASH_ERR_FAIL：其它失败。
  */
 FlashDrv_ReturnType FlashDrv_Write(uint32 addr, uint16 len, const uint8 *src);
 
 /**
- * \brief 擦除指定 cluster（置为 0xFF）。
- * \param clusterIdx cluster 索引 [0, clusterCount)
- * \return FLASH_OK / FLASH_ERR_PARAM / FLASH_ERR_ERASE / FLASH_ERR_FAIL
+ * \brief 擦除指定 cluster（整 cluster 置为 0xFF）。
+ * \param[in] clusterIdx cluster 索引 [0, clusterCount)
+ * \return FLASH_OK：成功；FLASH_ERR_PARAM：索引越界；FLASH_ERR_ERASE：擦除失败；FLASH_ERR_FAIL：其它失败。
  */
 FlashDrv_ReturnType FlashDrv_EraseCluster(uint8 clusterIdx);
 
 /**
- * \brief 查询 Flash 属性。
- * \param prop 输出属性结构
- * \return FLASH_OK / FLASH_ERR_PARAM
+ * \brief 查询 Flash 属性（页/cluster/容量等）。
+ * \details 属性须与 config/MiniFee_Cfg.h 的配置一致，由 MiniFee_Init 启动时校验。
+ * \param[out] prop 属性输出结构
+ * \return FLASH_OK：成功；FLASH_ERR_PARAM：prop 为空。
  */
 FlashDrv_ReturnType FlashDrv_GetProperty(FlashDrv_PropertyType *prop);
 

@@ -1,17 +1,15 @@
 /**
  * \file MiniNvm.c
  * \brief MiniNvm（NVRAM 管理）实现
- *
- * 设计要点（详见 docs/03_mininvm_design.md）：
- *  - 块类型：仅 Native 单副本；块 ID、数量、大小和 RAM mirror 来自 MiniNvm_Cfg.h。
- *  - RAM 镜像策略（P0 第 13 条）：
- *      * Init：接收集成方块配置表+RAM缓冲，按 size 累加计算 ramOffset，镜像填缺省，状态置 UNINIT。
- *      * ReadAll（上电）：逐块经 MiniFee_ReadBlock 读入镜像，CRC 校验，无效块装缺省并置 INVALID。
- *      * WriteBlock（运行期）：只更新镜像 + dirty，不落 Flash（同步）。
- *      * EraseNvBlock：镜像置缺省 + dirty + INVALID。
- *      * WriteAll（跳转 APP/下电前）：逐 dirty 块经 MiniFee 回写，VALID→WriteBlock，INVALID→EraseBlock。
- *  - 访问链路：bootloader → MiniNvm → MiniFee → FlashDrv，绝不绕过。
- *  - 全同步、纯 C、无动态内存、OS 无关。
+ * \details 设计要点详见 docs/03_mininvm_design.md：
+ *          - 块类型：仅 Native 单副本；块 ID、数量、大小和 RAM mirror 来自 MiniNvm_Cfg.h；
+ *          - RAM 镜像策略：Init 建 ramOffset 与镜像初态（UNINIT）；ReadAll 逐块经
+ *            MiniFee_ReadBlock 读入镜像并 CRC 校验，无效块装缺省置 INVALID；
+ *            WriteBlock 运行期只更新镜像+dirty，不落 Flash；EraseNvBlock 镜像置缺省+dirty+INVALID；
+ *            WriteAll 逐 dirty 块回写（VALID→MiniFee_WriteBlock，INVALID→MiniFee_EraseBlock）；
+ *          - 访问链路：bootloader → MiniNvm → MiniFee → FlashDrv，绝不绕过；
+ *          - 全同步、纯 C99、无动态内存、OS 无关。
+ * \req P0 #13（RAM 镜像写回）、P0 #19（仅同步）
  */
 
 #include "MiniNvm.h"
@@ -32,6 +30,11 @@ static MiniNvm_ErrorStatusType  blockErr[MININVM_MAX_NUM_BLOCKS];
 static boolean inited = FALSE;
 
 /* ---- 内部助手 ---- */
+/**
+ * \brief 以缺省字节 MININVM_DEFAULT_BYTE 填充指定镜像区间。
+ * \param[out] buf 目标缓冲
+ * \param[in] size 填充字节数
+ */
 static void fillDefault(uint8 *buf, uint16 size)
 {
     uint16 i;
@@ -41,6 +44,11 @@ static void fillDefault(uint8 *buf, uint16 size)
     }
 }
 
+/**
+ * \brief 块 ID 合法性检查。
+ * \param[in] blockId 待检查的块 ID
+ * \return TRUE：在 [0, numBlocks) 内；FALSE：越界。
+ */
 static boolean validBlockId(uint16 blockId)
 {
     return (blockId < numBlocks) ? TRUE : FALSE;
@@ -48,6 +56,11 @@ static boolean validBlockId(uint16 blockId)
 
 /* ---- 对外 API ---- */
 
+/**
+ * \brief 初始化：先 MiniFee_Init（含 Flash 扫描恢复），再逐块累加 size 计算 ramOffset、
+ *        镜像填缺省、状态置 UNINIT，最后校验镜像容量覆盖 size 总和。
+ * \req P0 #15、TC-N-01
+ */
 Std_ReturnType MiniNvm_Init(void)
 {
     uint16 b;
@@ -80,6 +93,11 @@ Std_ReturnType MiniNvm_Init(void)
     return E_OK;
 }
 
+/**
+ * \brief 上电读全部：逐块（readAll=TRUE）调 MiniFee_ReadBlock；OK→VALID；
+ *        NOT_FOUND→装缺省置 INVALID（非致命）；CRC→INVALID+ERR_CRC；其它→INVALID+ERR_READ。
+ * \req P0 #13、TC-N-01
+ */
 Std_ReturnType MiniNvm_ReadAll(void)
 {
     uint16 b;
@@ -132,6 +150,10 @@ Std_ReturnType MiniNvm_ReadAll(void)
     return E_OK;
 }
 
+/**
+ * \brief 读块：UNINIT/参数非法直接拒绝；其余先拷镜像，再按块状态返回 E_OK/E_NOT_OK。
+ * \req P0 #11、#13
+ */
 Std_ReturnType MiniNvm_ReadBlock(uint16 blockId, uint8 *dataBuf)
 {
     if (!inited)
@@ -150,6 +172,10 @@ Std_ReturnType MiniNvm_ReadBlock(uint16 blockId, uint8 *dataBuf)
     return (blockState[blockId] == MININVM_BLOCK_VALID) ? E_OK : E_NOT_OK;
 }
 
+/**
+ * \brief 写块：memcpy 到镜像 + dirty + VALID + 清错误；不调 MiniFee、不碰 Flash。
+ * \req P0 #13、TC-N-02
+ */
 Std_ReturnType MiniNvm_WriteBlock(uint16 blockId, const uint8 *dataBuf)
 {
     if (!inited)
@@ -167,6 +193,10 @@ Std_ReturnType MiniNvm_WriteBlock(uint16 blockId, const uint8 *dataBuf)
     return E_OK;
 }
 
+/**
+ * \brief 擦除块：镜像置缺省 + dirty + INVALID；真实作废 Flash 页由 WriteAll 完成。
+ * \req P0 #11、#13
+ */
 Std_ReturnType MiniNvm_EraseNvBlock(uint16 blockId)
 {
     if (!inited)
@@ -184,6 +214,11 @@ Std_ReturnType MiniNvm_EraseNvBlock(uint16 blockId)
     return E_OK;
 }
 
+/**
+ * \brief 全部回写：逐块（writeAll=TRUE 且 dirty）VALID→MiniFee_WriteBlock、
+ *        INVALID→MiniFee_EraseBlock；成功清 dirty，失败置 ERR_WRITE/ERR_ERASE 并保留 dirty 待重试。
+ * \req P0 #13、TC-N-03、TC-N-06
+ */
 Std_ReturnType MiniNvm_WriteAll(void)
 {
     uint16 b;
@@ -231,6 +266,10 @@ Std_ReturnType MiniNvm_WriteAll(void)
     return allOk ? E_OK : E_NOT_OK;
 }
 
+/**
+ * \brief 错误状态查询：返回块错误位掩码；UNINIT 块额外或上 MININVM_ERR_UNINIT。
+ * \req P0 #11
+ */
 Std_ReturnType MiniNvm_GetErrorStatus(uint16 blockId, MiniNvm_ErrorStatusType *errorStatus)
 {
     if (!inited)
@@ -252,6 +291,10 @@ Std_ReturnType MiniNvm_GetErrorStatus(uint16 blockId, MiniNvm_ErrorStatusType *e
     return E_OK;
 }
 
+/**
+ * \brief 块大小查询：直接返回配置表 size；越界返回 0。
+ * \req P0 #15、TC-N-08
+ */
 uint16 MiniNvm_GetBlockSize(uint16 blockId)
 {
     if (!validBlockId(blockId))
@@ -261,6 +304,10 @@ uint16 MiniNvm_GetBlockSize(uint16 blockId)
     return blockTable[blockId].size;
 }
 
+/**
+ * \brief 块数查询：返回静态配置块数（枚举末项 MININVM_MAX_NUM_BLOCKS）。
+ * \req P0 #15
+ */
 uint16 MiniNvm_GetNumBlocks(void)
 {
     return numBlocks;

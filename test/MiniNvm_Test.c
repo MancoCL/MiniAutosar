@@ -1,8 +1,9 @@
 /**
  * \file MiniNvm_Test.c
  * \brief MiniNvm 单元测试（宿主机）
- *
- * 块数量、块表和 RAM mirror 来自 MiniNvm_Cfg.h，验证静态配置语义。
+ * \details 用例编号 TC-N-01~TC-N-09，用例表与预期见 docs/05_test_plan.md §3；
+ *          块数量、块表和 RAM mirror 来自 MiniNvm_Cfg.h，验证静态配置语义。
+ *          重启模拟 = 不调 FlashDrv_Stub_Reset，直接再调 MiniNvm_Init + ReadAll（docs/05 §1）。
  */
 #include "Test_Common.h"
 #include "MiniNvm.h"
@@ -12,11 +13,13 @@
 #include "MiniFee_Cfg.h"
 #include <string.h>
 
-/* 测试缓冲按页数据区大小（= 块大小上限） */
+/** 测试读写缓冲（按页数据区大小 = 块大小上限）。 */
 static uint8 wbuf[MINIFEE_PAGE_DATA_SIZE];
 static uint8 rbuf[MINIFEE_PAGE_DATA_SIZE];
 
-/* 便捷 Init 包装 */
+/**
+ * \brief 便捷初始化包装：全新首启（Stub_Reset 整片擦除）+ MiniNvm_Init + ReadAll。
+ */
 static void testInit(void)
 {
     FlashDrv_Stub_Reset();
@@ -24,7 +27,12 @@ static void testInit(void)
     (void)MiniNvm_ReadAll();
 }
 
-/* 按 size 填充测试模式 */
+/**
+ * \brief 以 seed+i 逐字节填充确定性测试模式。
+ * \param[out] buf 目标缓冲
+ * \param[in] size 填充字节数
+ * \param[in] seed 起始种子
+ */
 static void pat(uint8 *buf, uint16 size, uint8 seed)
 {
     uint16 i;
@@ -34,7 +42,7 @@ static void pat(uint8 *buf, uint16 size, uint8 seed)
     }
 }
 
-/* TC-N-01: Init + ReadAll 首启；未 ReadAll 读返回未初始化（P0 #11/#13） */
+/** \brief TC-N-01：Init + ReadAll 首启；未 ReadAll 前读取返回未初始化错误。\req P0 #11、#13 */
 static void tc_init_readall_firstboot(void)
 {
     FlashDrv_Stub_Reset();
@@ -51,7 +59,7 @@ static void tc_init_readall_firstboot(void)
     CHECK(MiniNvm_ReadBlock(0u, rbuf) == E_NOT_OK, "read first-boot block -> E_NOT_OK");
 }
 
-/* TC-N-02: WriteBlock 只更新 RAM（不落 Flash）（P0 #13） */
+/** \brief TC-N-02：WriteBlock 只更新 RAM（不落 Flash，Flash 字节保持 0xFF）。\req P0 #13 */
 static void tc_writeblock_ram_only(void)
 {
     uint16 sz;
@@ -65,7 +73,7 @@ static void tc_writeblock_ram_only(void)
     CHECK(MiniFee_ReadBlock(0u, rbuf, NULL_PTR) == MINIFEE_ERR_NOT_FOUND, "Flash not touched");
 }
 
-/* TC-N-03: WriteAll 持久化 + 重启恢复（P0 #13） */
+/** \brief TC-N-03：WriteAll 持久化 + 重启恢复（不调 Stub_Reset，直接再 Init + ReadAll）。\req P0 #13 */
 static void tc_writeall_persist(void)
 {
     uint16 sz;
@@ -82,7 +90,7 @@ static void tc_writeall_persist(void)
     CHECK(memcmp(rbuf, wbuf, sz) == 0, "value survives reboot");
 }
 
-/* TC-N-04: EraseNvBlock + WriteAll 真擦除（P0 #11） */
+/** \brief TC-N-04：EraseNvBlock + WriteAll 真擦除（重启后该块仍 INVALID，其余块完好）。\req P0 #11 */
 static void tc_erase_then_writeall(void)
 {
     uint16 sz;
@@ -99,7 +107,7 @@ static void tc_erase_then_writeall(void)
     CHECK(MiniNvm_ReadBlock(1u, rbuf) == E_NOT_OK, "erased block -> E_NOT_OK after reboot");
 }
 
-/* TC-N-05: CRC 损坏经 ReadAll 记入错误状态（P0 #10/#11） */
+/** \brief TC-N-05：CRC 损坏经 ReadAll 记入错误状态，读镜像返回 E_NOT_OK。\req P0 #10、#11 */
 static void tc_crc_error_status(void)
 {
     uint16 sz;
@@ -121,7 +129,7 @@ static void tc_crc_error_status(void)
     CHECK(MiniNvm_ReadBlock(2u, rbuf) == E_NOT_OK, "corrupt block read -> E_NOT_OK");
 }
 
-/* TC-N-06: WriteAll 部分失败传播 + dirty 保留 + 重试恢复（P0 #11） */
+/** \brief TC-N-06：WriteAll 部分失败错误传播 + dirty 保留 + 重试后恢复完整。\req P0 #11 */
 static void tc_writeall_partial_fail(void)
 {
     uint16 sz0, sz1;
@@ -144,7 +152,7 @@ static void tc_writeall_partial_fail(void)
     CHECK(MiniNvm_WriteAll() == E_OK, "WriteAll retry ok");
 }
 
-/* TC-N-07: 多块混合写 + 重启校验（P0 #13/#15），验证各块变长 size */
+/** \brief TC-N-07：多块混合写 + 重启校验，验证各块变长 size 互不串扰。\req P0 #13、#15 */
 static void tc_multi_block(void)
 {
     uint8 seeds[5] = {0x10, 0x20, 0x30, 0x40, 0x50};
@@ -169,7 +177,7 @@ static void tc_multi_block(void)
     }
 }
 
-/* TC-N-08: 变长块大小查询 + 块数查询 + 边界校验 */
+/** \brief TC-N-08：变长块大小查询 + 块数查询 + 越界边界校验。\req P0 #15 */
 static void tc_variable_block_size(void)
 {
     FlashDrv_Stub_Reset();
@@ -183,7 +191,11 @@ static void tc_variable_block_size(void)
     CHECK(MiniNvm_GetBlockSize(MININVM_MAX_NUM_BLOCKS) == 0u, "invalid block -> size 0");
 }
 
-/* TC-N-09: 枚举末项自动提供块数，配置镜像由 Init 自动使用 */
+/**
+ * \brief TC-N-09：枚举末项自动提供块数；配置镜像由 Init 自动使用；
+ *        Σ GetBlockSize = MININVM_RAM_MIRROR_SIZE（镜像容量自动计算正确）。
+ * \req P0 #15
+ */
 static void tc_init_param(void)
 {
     FlashDrv_Stub_Reset();
@@ -200,6 +212,7 @@ static void tc_init_param(void)
     }
 }
 
+/** \brief 依次运行 TC-N-01~TC-N-09。 */
 void run_mininvm_tests(void)
 {
     tc_init_readall_firstboot();

@@ -1,8 +1,8 @@
 /**
  * \file MiniFee_Test.c
  * \brief MiniFee 单元测试（宿主机）
- *
- * 块数量运行时传入（非编译期固定），测试用 8 块。
+ * \details 用例编号 TC-F-01~TC-F-09，用例表与预期见 docs/05_test_plan.md §2；
+ *          块数量运行时传入（非编译期固定），测试用 8 块。
  */
 #include "Test_Common.h"
 #include "MiniFee.h"
@@ -10,11 +10,19 @@
 #include "MiniFee_Cfg.h"
 #include <string.h>
 
+/** 测试块数（运行时传入 MiniFee_Init；须 > 0 且 < pagesPerCluster）。 */
 #define TEST_NUM_BLOCKS  ((uint16)8)
 
+/** 测试读写缓冲（按页数据区大小）。 */
 static uint8 wrbuf[MINIFEE_PAGE_DATA_SIZE];
 static uint8 rdbuf[MINIFEE_PAGE_DATA_SIZE];
 
+/**
+ * \brief 以 seed+i 逐字节填充确定性测试模式。
+ * \param[out] buf 目标缓冲
+ * \param[in] len 填充字节数
+ * \param[in] seed 起始种子
+ */
 static void fill_pattern(uint8 *buf, uint16 len, uint8 seed)
 {
     uint16 i;
@@ -24,7 +32,7 @@ static void fill_pattern(uint8 *buf, uint16 len, uint8 seed)
     }
 }
 
-/* TC-F-01: 全 0xFF 首启，读取未写过块返回 NOT_FOUND（P0 #9/#12） */
+/** \brief TC-F-01：全 0xFF 首启，读取未写过块返回 NOT_FOUND；查询接口返回配置值。\req P0 #9、#12 */
 static void tc_first_boot(void)
 {
     FlashDrv_Stub_Reset();
@@ -35,7 +43,7 @@ static void tc_first_boot(void)
     CHECK(MiniFee_GetNumBlocks() == TEST_NUM_BLOCKS, "num blocks");
 }
 
-/* TC-F-02: 正常写读（P0 #5/#10） */
+/** \brief TC-F-02：正常写读（写 → 读 → 比对，返回长度正确）。\req P0 #5、#10 */
 static void tc_write_read_basic(void)
 {
     FlashDrv_Stub_Reset();
@@ -50,7 +58,7 @@ static void tc_write_read_basic(void)
     }
 }
 
-/* TC-F-03: 块更新作废旧页，仅一份有效（P0 #5/#6） */
+/** \brief TC-F-03：块更新作废旧页，仅一份有效，读回最新版本 v2。\req P0 #5、#6 */
 static void tc_block_update(void)
 {
     FlashDrv_Stub_Reset();
@@ -66,9 +74,12 @@ static void tc_block_update(void)
     }
 }
 
-/* TC-F-04: 写满 cluster 触发 GC + 磨损轮转（P0 #6/#7）
- * Model A：所有写落到 active cluster；写满后 GC 把有效页搬到备用 cluster，擦除原 cluster。
- * 用 block1/block2 各写一次 + block0 重复写产生垃圾，填满 active(32 页) 后再写触发 GC。 */
+/**
+ * \brief TC-F-04：写满 cluster 触发 GC + 磨损轮转。
+ * \details Model A：所有写落到 active cluster；写满后 GC 把有效页搬到备用 cluster，擦除原 cluster。
+ *          用 block1/block2 各写一次 + block0 重复写产生垃圾，填满 active(32 页) 后再写触发 GC。
+ * \req P0 #6、#7
+ */
 static void tc_gc_and_wear(void)
 {
     uint16 i;
@@ -102,7 +113,7 @@ static void tc_gc_and_wear(void)
     }
 }
 
-/* TC-F-05: CRC 损坏识别（P0 #10） */
+/** \brief TC-F-05：CRC 损坏识别（SetByte 注入数据损坏，重扫描后读报 ERR_CRC）。\req P0 #10 */
 static void tc_crc_corrupt(void)
 {
     uint16 dl = 0u;
@@ -117,7 +128,7 @@ static void tc_crc_corrupt(void)
     CHECK(MiniFee_ReadBlock(1u, rdbuf, &dl) == MINIFEE_ERR_CRC, "CRC corruption detected");
 }
 
-/* TC-F-06: EraseBlock 作废 + 幂等（P0 #11 erase） */
+/** \brief TC-F-06：EraseBlock 作废有效页 + 幂等，擦后读返回 NOT_FOUND。\req P0 #11 */
 static void tc_erase_block(void)
 {
     FlashDrv_Stub_Reset();
@@ -129,7 +140,7 @@ static void tc_erase_block(void)
     CHECK(MiniFee_EraseBlock(2u) == MINIFEE_OK, "erase idempotent");
 }
 
-/* TC-F-07: 掉电丢"最新一页"（P0 #9）——提交前掉电，恢复后回到上一版本 */
+/** \brief TC-F-07：掉电丢"最新一页"——FailStatusWrites 在提交步失败，恢复后回到上一版本。\req P0 #9 */
 static void tc_power_loss_latest(void)
 {
     FlashDrv_Stub_Reset();
@@ -150,7 +161,7 @@ static void tc_power_loss_latest(void)
     }
 }
 
-/* TC-F-08: 参数非法 */
+/** \brief TC-F-08：参数非法（越界/NULL/len 过大）返回 ERR_PARAM。 */
 static void tc_param_errors(void)
 {
     FlashDrv_Stub_Reset();
@@ -161,7 +172,7 @@ static void tc_param_errors(void)
     CHECK(MiniFee_ReadBlock(0u, NULL_PTR, NULL_PTR) == MINIFEE_ERR_PARAM, "null dest");
 }
 
-/* TC-F-09: Init 参数校验（块数 0 / 超上限 / 超 pagesPerCluster） */
+/** \brief TC-F-09：Init 参数校验（块数 0 / 超上限 / 超 pagesPerCluster）。 */
 static void tc_init_param(void)
 {
     FlashDrv_Stub_Reset();
@@ -171,6 +182,7 @@ static void tc_init_param(void)
     CHECK(MiniFee_Init(33u) == MINIFEE_ERR_PARAM, "numBlocks>=pagesPerCluster rejected");
 }
 
+/** \brief 依次运行 TC-F-01~TC-F-09。 */
 void run_minifee_tests(void)
 {
     tc_first_boot();

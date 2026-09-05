@@ -1,11 +1,11 @@
 /**
  * \file MiniNvm_Cfg.h
  * \brief MiniNvm 配置（结构定义 + 常量）
- *
- * 块 ID、块配置表和 RAM mirror 均由集成方在本头文件中配置。
- * 枚举末项自动表示块数量，新增块时无需同步维护数量宏。
- * 各块大小以 MININVM_BLOCK_x_SIZE 宏为唯一数据源；
- * MININVM_RAM_MIRROR_SIZE 由各块 size 之和自动计算，禁止手工填总容量。
+ * \details 块 ID、块配置表和 RAM mirror 均由集成方在本头文件中配置。
+ *          枚举末项自动表示块数量，新增块时无需同步维护数量宏；
+ *          各块大小以 MININVM_BLOCK_x_SIZE 宏为唯一数据源，
+ *          MININVM_RAM_MIRROR_SIZE 由各块 size 之和自动计算，禁止手工填总容量。
+ * \req P0 #15（块数与大小逐块指定）
  */
 #ifndef MININVM_CFG_H
 #define MININVM_CFG_H
@@ -13,6 +13,7 @@
 #include "Std_Types.h"
 
 /* ---- 块 ID 与数量（末项必须保持为最后一项） ---- */
+/** \brief 块 ID 枚举。末项 MININVM_MAX_NUM_BLOCKS 自动表示块数量，新增块时在末项前追加。\req P0 #15 */
 typedef enum
 {
     MININVM_BLOCK_ID_0 = 0,
@@ -45,7 +46,7 @@ typedef struct
 
 /* ---- 集成方配置：新增块时同步增加枚举项、大小宏、表条目和求和项 ---- */
 
-/* 各块大小（编译期常量，配置表与 RAM 镜像容量的唯一数据源） */
+/** 各块大小（编译期常量，配置表与 RAM 镜像容量的唯一数据源）。 */
 #define MININVM_BLOCK_0_SIZE   ((uint16)0x80u)
 #define MININVM_BLOCK_1_SIZE   ((uint16)0x40u)
 #define MININVM_BLOCK_2_SIZE   ((uint16)0xF0u)
@@ -55,13 +56,14 @@ typedef struct
 #define MININVM_BLOCK_6_SIZE   ((uint16)0x60u)
 #define MININVM_BLOCK_7_SIZE   ((uint16)0x40u)
 
-/* RAM 镜像总容量 = 各块 size 之和（自动计算，勿手填；MiniNvm_Init 运行时校验兜底） */
+/** RAM 镜像总容量 = 各块 size 之和（自动计算，勿手填；MiniNvm_Init 运行时校验兜底）。 */
 #define MININVM_RAM_MIRROR_SIZE \
     ((uint16)(MININVM_BLOCK_0_SIZE + MININVM_BLOCK_1_SIZE + \
               MININVM_BLOCK_2_SIZE + MININVM_BLOCK_3_SIZE + \
               MININVM_BLOCK_4_SIZE + MININVM_BLOCK_5_SIZE + \
               MININVM_BLOCK_6_SIZE + MININVM_BLOCK_7_SIZE))
 
+/** 静态块配置表（本头文件内定义，MiniNvm_Init(void) 自动使用）。 */
 static const MiniNvm_BlockConfigType MiniNvm_BlockConfig[MININVM_MAX_NUM_BLOCKS] = {
     {MININVM_BLOCK_ID_0, MININVM_BLOCK_0_SIZE, 0u, TRUE, TRUE},
     {MININVM_BLOCK_ID_1, MININVM_BLOCK_1_SIZE, 0u, TRUE, TRUE},
@@ -73,6 +75,7 @@ static const MiniNvm_BlockConfigType MiniNvm_BlockConfig[MININVM_MAX_NUM_BLOCKS]
     {MININVM_BLOCK_ID_7, MININVM_BLOCK_7_SIZE, 0u, TRUE, TRUE}
 };
 
+/** 静态 RAM 镜像（容量 = MININVM_RAM_MIRROR_SIZE，本头文件内定义）。 */
 static uint8 MiniNvm_RamMirror[MININVM_RAM_MIRROR_SIZE];
 
 #endif /* MININVM_CFG_H */
