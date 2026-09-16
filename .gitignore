@@ -1,0 +1,21 @@
+# Build output
+/build/
+/out/
+
+# Toolchain installed by tools/setup-toolchain.ps1 (kept outside the repo by default)
+/.tools/
+
+# Editors / OS
+.vscode/*.local.json
+Thumbs.db
+desktop.ini
+
+# Compiler / debugger artifacts
+*.o
+*.obj
+*.a
+*.exe
+*.dll
+*.pdb
+*.ilk
+*.stackdump
