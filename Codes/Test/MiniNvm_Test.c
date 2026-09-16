@@ -1,31 +1,28 @@
-/*  BEGIN_FILE_HDR
-******************************************Copyright(C)*****************************************
-*
-*                                       YKXH  Technology
-*
-***********************************文件信息***************************************************
-*   文件名       @: MiniNvm_Test.c
-************************************************************************************************
-*   工程/产品     @:
-*   标题         @:
-*   作者         @: Manco
-************************************************************************************************
-*   描述         @: MiniNvm 开发阶段功能自检实现：参数、空白、读写、多块、取消、失败恢复、
-*                   以及多次整块重写触发簇迁移/翻页的用例。
-*
-************************************************************************************************
-*   限制         @: 自检会擦除并重写数据 Flash 区域，禁止在量产流程中调用。
-*
-************************************************************************************************
-*   修订历史:
-*
-*   版本       日期          编写人            CR#         描述
-*   --------   -----------   ----------------   --------    -----------------------
-*   V1.0       2026/09/10    Manco              N/A         初版发布
-*   V1.1       2026/09/16    Manco              N/A         用例适配新语义（空白返回全零、脏块落盘）
-*
-************************************************************************************************
-* END_FILE_HDR*/
+/**
+ * Copyright (C) 2026 Manco
+ *
+ * 本文件为个人项目 MiniAutosar 的组成部分，与任何公司或组织无关。
+ * 可自由使用、修改和分发，请保留本版权声明。
+ ************************************************************************************************************************
+ **
+ **  @file               : MiniNvm_Test.c
+ **  @author             : Manco
+ **  @date               : 2026/09/16
+ **  @vendor             :
+ **  @version            : V1.1
+ **  @description        : MiniNvm 开发阶段功能自检实现（参数、空白、读写、多块、取消及轮换/迁移用例）。
+ **
+ **  @note               : 自检会擦除并重写数据 Flash 区域，禁止在量产流程中调用。
+ **
+ **  @revision           :
+ **  版本      日期          编写人        CR#      描述
+ **  --------  -----------   -----------   -------  ---------------------------------------------
+ **  V1.0      2026/09/10    Manco         N/A      初版发布
+ **  V1.1      2026/09/16    Manco         N/A      用例适配新语义（空白返回全零、脏块落盘）
+ **
+ ***********************************************************************************************************************/
+
+/* =================================================== inclusions =================================================== */
 #include "MiniNvm_Test.h"
 #include "MiniFee_Cfg.h"
 #include "MiniFlsIf.h"
@@ -35,20 +32,29 @@
 #define MININVM_TEST_LENGTH           (MININVM_MAX_BLOCK_LENGTH)
 #define MININVM_TEST_ROT_ROUNDS       (8u)   /* 轮换/迁移用例轮数：每轮整块重写全部 Block，触发多次簇迁移 */
 
-/**********************************************************************************************
-* 实现说明：
-*   本文件是 MiniNvm 的开发自检，通过直接调用 MiniNvm/MiniFee/MiniFlsIf 接口并显式轮询
-*   三者的 MainFunction 来驱动完整异步链路，逐用例校验返回结果与数据一致性。
-*   轮询均带 MININVM_TEST_POLL_GUARD 上限，超时判定失败，避免死循环。
-***********************************************************************************************/
+/* ================================================== module overview =============================================== */
+/**
+ * @brief           实现说明。
+ * @details         本文件是 MiniNvm 的开发自检，通过直接调用 MiniNvm/MiniFee/MiniFlsIf 接口并显式轮询
+ *                  三者的 MainFunction 来驱动完整异步链路，逐用例校验返回结果与数据一致性。
+ *                  轮询均带 MININVM_TEST_POLL_GUARD 上限，超时判定失败，避免死循环。
+ */
 
+/* ============================================ external data definitions =========================================== */
 MiniNvm_TestResultType MiniNvm_TestResult;
 
-static uint8 MiniNvm_Test_Work[MININVM_TEST_LENGTH];      /* 实际读回数据工作缓冲 */
-static uint8 MiniNvm_Test_Expected[MININVM_TEST_LENGTH];  /* 期望数据缓冲 */
-static uint8 MiniNvm_Test_CurrentCase;                    /* 当前用例编号 */
+/* ============================================ internal data definitions =========================================== */
+static uint8 MiniNvm_Test_Work[MININVM_TEST_LENGTH];      /**< 实际读回数据工作缓冲 */
+static uint8 MiniNvm_Test_Expected[MININVM_TEST_LENGTH];  /**< 期望数据缓冲 */
+static uint8 MiniNvm_Test_CurrentCase;                    /**< 当前用例编号 */
 
-/* 测试本地字节拷贝 */
+/**
+ * @brief           测试本地字节拷贝
+ * @param[out]      destination: 目标缓冲。
+ * @param[in]       source: 源缓冲。
+ * @param[in]       length: 拷贝字节数。
+ * @return          void
+ */
 static void MiniNvm_Test_Copy(uint8* destination, const uint8* source, uint32 length)
 {
     uint32 index;
@@ -59,7 +65,13 @@ static void MiniNvm_Test_Copy(uint8* destination, const uint8* source, uint32 le
     }
 }
 
-/* 用固定规律填充测试数据（seed 决定内容），便于重复构造可预期的数据 */
+/**
+ * @brief           用固定规律填充测试数据（seed 决定内容），便于重复构造可预期的数据
+ * @param[out]      data: 待填充缓冲。
+ * @param[in]       length: 填充字节数。
+ * @param[in]       seed: 起始种子，逐字节递增填充。
+ * @return          void
+ */
 static void MiniNvm_Test_Fill(uint8* data, uint32 length, uint8 seed)
 {
     uint32 index;
@@ -70,14 +82,23 @@ static void MiniNvm_Test_Fill(uint8* data, uint32 length, uint8 seed)
     }
 }
 
-/* 标记开始执行某个用例 */
+/**
+ * @brief           标记开始执行某个用例
+ * @param[in]       caseId: 用例编号。
+ * @return          void
+ */
 static void MiniNvm_Test_Begin(uint8 caseId)
 {
     MiniNvm_Test_CurrentCase = caseId;
     MiniNvm_TestResult.CurCase = caseId;
 }
 
-/* 记录当前用例在某步骤失败并返回 E_NOT_OK */
+/**
+ * @brief           记录当前用例在某步骤失败并返回 E_NOT_OK
+ * @param[in]       step: 失败步骤编号。
+ * @return          uint8
+ * @retval          E_NOT_OK: 固定返回失败。
+ */
 static uint8 MiniNvm_Test_Fail(uint8 step)
 {
     MiniNvm_TestResult.FailCaseId = MiniNvm_Test_CurrentCase;
@@ -85,7 +106,16 @@ static uint8 MiniNvm_Test_Fail(uint8 step)
     return E_NOT_OK;
 }
 
-/* 比较 expected 与 actual，不一致时记录首个差异字节位置并返回 E_NOT_OK */
+/**
+ * @brief           比较 expected 与 actual，不一致时记录首个差异字节位置并返回 E_NOT_OK
+ * @param[in]       step: 检查点编号。
+ * @param[in]       expected: 期望数据。
+ * @param[in]       actual: 实际数据。
+ * @param[in]       length: 比较字节数。
+ * @return          uint8
+ * @retval          E_OK: 完全一致。
+ * @retval          E_NOT_OK: 存在差异，已记录首个不一致字节。
+ */
 static uint8 MiniNvm_Test_Check(uint8 step, const uint8* expected,
                                 const uint8* actual, uint32 length)
 {
@@ -106,7 +136,12 @@ static uint8 MiniNvm_Test_Check(uint8 step, const uint8* expected,
     return E_OK;
 }
 
-/* 擦除全部 Cluster：直接从 MiniFlsIf 发起擦除并阻塞轮询至 IDLE，构造空白起点 */
+/**
+ * @brief           擦除全部 Cluster：直接从 MiniFlsIf 发起擦除并阻塞轮询至 IDLE，构造空白起点
+ * @return          uint8
+ * @retval          E_OK: 全部 Cluster 擦除完成。
+ * @retval          E_NOT_OK: 擦除失败或超时。
+ */
 static uint8 MiniNvm_Test_EraseAll(void)
 {
     uint8 clusterIndex;
@@ -136,7 +171,11 @@ static uint8 MiniNvm_Test_EraseAll(void)
     return E_OK;
 }
 
-/* 驱动单个 Block 的异步请求直至完成：按 FlsIf->Fee->Nvm 顺序轮询，返回该块最终结果 */
+/**
+ * @brief           驱动单个 Block 的异步请求直至完成：按 FlsIf->Fee->Nvm 顺序轮询，返回该块最终结果
+ * @param[in]       blockId: MiniNvm 块号（1..N）。
+ * @return          MiniNvm_RequestResultType: 该块最终结果。
+ */
 static MiniNvm_RequestResultType MiniNvm_Test_DriveBlock(uint8 blockId)
 {
     uint32 guard = MININVM_TEST_POLL_GUARD;
@@ -161,7 +200,10 @@ static MiniNvm_RequestResultType MiniNvm_Test_DriveBlock(uint8 blockId)
     return result;
 }
 
-/* 驱动多块作业直至完成：按 FlsIf->Fee->Nvm 顺序轮询，返回总体结果 */
+/**
+ * @brief           驱动多块作业直至完成：按 FlsIf->Fee->Nvm 顺序轮询，返回总体结果
+ * @return          MiniNvm_RequestResultType: 多块作业最终结果。
+ */
 static MiniNvm_RequestResultType MiniNvm_Test_DriveMulti(void)
 {
     uint32 guard = MININVM_TEST_POLL_GUARD;
@@ -183,7 +225,14 @@ static MiniNvm_RequestResultType MiniNvm_Test_DriveMulti(void)
     return result;
 }
 
-/* 校验指定块的最终结果是否等于 expected */
+/**
+ * @brief           校验指定块的最终结果是否等于 expected
+ * @param[in]       blockId: MiniNvm 块号（1..N）。
+ * @param[in]       expected: 期望结果。
+ * @return          uint8
+ * @retval          E_OK: 与期望一致。
+ * @retval          E_NOT_OK: 不一致。
+ */
 static uint8 MiniNvm_Test_GetResult(uint8 blockId, MiniNvm_RequestResultType expected)
 {
     MiniNvm_RequestResultType result;
@@ -195,7 +244,10 @@ static uint8 MiniNvm_Test_GetResult(uint8 blockId, MiniNvm_RequestResultType exp
     return (result == expected) ? E_OK : E_NOT_OK;
 }
 
-/* 用例：非法参数与未初始化请求应被拒绝（返回 E_NOT_OK） */
+/**
+ * @brief           用例：非法参数与未初始化请求应被拒绝（返回 E_NOT_OK）
+ * @return          uint8: E_OK 通过 / E_NOT_OK 失败。
+ */
 static uint8 MiniNvm_Test_CaseParam(void)
 {
     uint8 data = 0u;
@@ -224,7 +276,10 @@ static uint8 MiniNvm_Test_CaseParam(void)
     return E_OK;
 }
 
-/* 用例：空白 Flash 中读取无记录块应返回全零默认值并成功，且多块结果保持 IDLE */
+/**
+ * @brief           用例：空白 Flash 中读取无记录块应返回全零默认值并成功，且多块结果保持 IDLE
+ * @return          uint8: E_OK 通过 / E_NOT_OK 失败。
+ */
 static uint8 MiniNvm_Test_CaseBlank(void)
 {
     uint32 index;
@@ -253,7 +308,10 @@ static uint8 MiniNvm_Test_CaseBlank(void)
     return (result == MININVM_REQ_IDLE) ? E_OK : MiniNvm_Test_Fail(4u);
 }
 
-/* 用例：单块写入后读回，数据应完全一致 */
+/**
+ * @brief           用例：单块写入后读回，数据应完全一致
+ * @return          uint8: E_OK 通过 / E_NOT_OK 失败。
+ */
 static uint8 MiniNvm_Test_CaseBasic(void)
 {
     MiniNvm_RequestResultType result;
@@ -284,7 +342,10 @@ static uint8 MiniNvm_Test_CaseBasic(void)
     return MiniNvm_Test_Check(5u, MiniNvm_Test_Expected, MiniNvm_Test_Work, length);
 }
 
-/* 用例：写入请求入队后立即改写源缓冲，验证入队快照生效、最终仍写入原数据 */
+/**
+ * @brief           用例：写入请求入队后立即改写源缓冲，验证入队快照生效、最终仍写入原数据
+ * @return          uint8: E_OK 通过 / E_NOT_OK 失败。
+ */
 static uint8 MiniNvm_Test_CaseSourceCopy(void)
 {
     uint32 length = MiniNvm_BlockDescriptor[1].Length;
@@ -316,7 +377,10 @@ static uint8 MiniNvm_Test_CaseSourceCopy(void)
     return MiniNvm_Test_Check(5u, MiniNvm_Test_Expected, MiniNvm_Test_Work, length);
 }
 
-/* 用例：经 WriteRam 置脏后 WriteAll 落盘、ReadAll 读回，逐块校验数据一致 */
+/**
+ * @brief           用例：经 WriteRam 置脏后 WriteAll 落盘、ReadAll 读回，逐块校验数据一致
+ * @return          uint8: E_OK 通过 / E_NOT_OK 失败。
+ */
 static uint8 MiniNvm_Test_CaseAll(void)
 {
     uint8 index;
@@ -380,7 +444,10 @@ static uint8 MiniNvm_Test_CaseAll(void)
     return E_OK;
 }
 
-/* 用例：排入两个写请求后取消作业，两块结果都应置 NOT_OK */
+/**
+ * @brief           用例：排入两个写请求后取消作业，两块结果都应置 NOT_OK
+ * @return          uint8: E_OK 通过 / E_NOT_OK 失败。
+ */
 static uint8 MiniNvm_Test_CaseCancel(void)
 {
     MiniNvm_Test_Begin(MININVM_TEST_CASE_CANCEL);
@@ -404,7 +471,14 @@ static uint8 MiniNvm_Test_CaseCancel(void)
     return MiniNvm_Test_GetResult(2u, MININVM_REQ_NOT_OK);
 }
 
-/* 经 MiniFlsIf 同步读取指定 Cluster 头（阻塞轮询，仅测试用） */
+/**
+ * @brief           经 MiniFlsIf 同步读取指定 Cluster 头（阻塞轮询，仅测试用）
+ * @param[in]       clusterIndex: 簇下标。
+ * @param[out]      hdrBuf: 目标缓冲，长度须 >= MINIFEE_CLUSTER_HEADER_SIZE。
+ * @return          uint8
+ * @retval          E_OK: 读取完成。
+ * @retval          E_NOT_OK: 读取失败。
+ */
 static uint8 MiniNvm_Test_ReadClusterHeader(uint8 clusterIndex, uint8* hdrBuf)
 {
     uint32 guard = MININVM_TEST_POLL_GUARD;
@@ -429,7 +503,12 @@ static uint8 MiniNvm_Test_ReadClusterHeader(uint8 clusterIndex, uint8* hdrBuf)
     return E_OK;
 }
 
-/* CRC-8（多项式 0x07，与 MiniFee 簇头校验一致），测试本地实现 */
+/**
+ * @brief           CRC-8（多项式 0x07，与 MiniFee 簇头校验一致），测试本地实现
+ * @param[in]       data: 待计算数据。
+ * @param[in]       length: 数据字节数。
+ * @return          uint8: CRC-8 结果。
+ */
 static uint8 MiniNvm_Test_Crc8(const uint8* data, uint32 length)
 {
     uint8 crc = 0u;
@@ -454,7 +533,10 @@ static uint8 MiniNvm_Test_Crc8(const uint8* data, uint32 length)
     return crc;
 }
 
-/* 多次整块重写（内容每次变化）直至触发簇迁移/翻页，验证迁移后所有 Block 数据保全与活动簇 Generation 递增 */
+/**
+ * @brief           多次整块重写（内容每次变化）直至触发簇迁移/翻页，验证迁移后所有 Block 数据保全与活动簇 Generation 递增
+ * @return          uint8: E_OK 通过 / E_NOT_OK 失败。
+ */
 static uint8 MiniNvm_Test_CaseRotate(void)
 {
     uint8 r;
@@ -555,7 +637,11 @@ static uint8 MiniNvm_Test_CaseRotate(void)
     return E_OK;
 }
 
-/* 统计单个用例通过/失败 */
+/**
+ * @brief           统计单个用例通过/失败
+ * @param[in]       result: 用例结果（E_OK 计通过，否则计失败）。
+ * @return          void
+ */
 static void MiniNvm_Test_Record(uint8 result)
 {
     if (result == E_OK)
@@ -568,8 +654,13 @@ static void MiniNvm_Test_Record(uint8 result)
     }
 }
 
-/* 自检入口：先验证未初始化拒绝请求，再初始化并擦除全簇，
- * 依次执行全部用例，最后汇总 OverallResult（FailCount==0 则 E_OK）。 */
+/**
+ * @brief           自检入口：先验证未初始化拒绝请求，再初始化并擦除全簇，
+ * 依次执行全部用例，最后汇总 OverallResult（FailCount==0 则 E_OK）。
+ * @return          uint8
+ * @retval          E_OK: 全部用例通过。
+ * @retval          E_NOT_OK: 存在失败用例，详情见 MiniNvm_TestResult。
+ */
 uint8 MiniNvm_Test(void)
 {
     uint8 result;
