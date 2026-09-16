@@ -1,41 +1,42 @@
-/*  BEGIN_FILE_HDR
-******************************************Copyright(C)*****************************************
-*
-*                                       YKXH  Technology
-*
-***********************************文件信息***************************************************
-*   文件名       @: MiniFee.c
-************************************************************************************************
-*   工程/产品     @:
-*   标题         @:
-*   作者         @: Manco
-************************************************************************************************
-*   描述         @: MiniFee EEPROM 仿真接口，基于 Flash 驱动的异步状态机存储抽象层。
-*                   按块号整块读写：块号由 MiniFee_BlockIdType 枚举定义，块大小由
- *                   MiniFee_BlockConfig[] 逐块配置；追加式写入 + RAM 块目录定位最新纪录；迁移
- *                   按块目录逐块拷贝每块最新纪录到备用簇，整簇擦除回收。
-*                   无 Valid/Invalid 标志、无 CLOSED 二次编程，任何区域仅一次编程。
-*
-************************************************************************************************
-*   限制         @: RH850 数据 Flash 每个程序单元在两次擦除间仅可编程一次（无 1→0 二次编程），
-*                   块内不得包含事后单独编程的标志页；旧纪录仅能靠迁移时整簇擦除回收。
-*
-************************************************************************************************
-*   修订历史:
-*
-*   版本       日期          编写人            CR#         描述
-*   --------   -----------   ----------------   --------    -----------------------
-*   V1.0       2026/09/10    Manco              N/A         初版发布
-*   V1.1       2026/09/16    Manco              N/A         重构：RAM 块目录、一次性读写、迁移改写
-*
-************************************************************************************************
-* END_FILE_HDR*/
+/**
+ * Copyright (C) 2026 Manco
+ *
+ * 本文件为个人项目 MiniAutosar 的组成部分，与任何公司或组织无关。
+ * 可自由使用、修改和分发，请保留本版权声明。
+ ************************************************************************************************************************
+ **
+ **  @file               : MiniFee.c
+ **  @author             : Manco
+ **  @date               : 2026/09/16
+ **  @vendor             :
+ **  @version            : V1.1
+ **  @description        : MiniFee EEPROM 仿真实现，基于 Flash 驱动的异步状态机存储抽象层。
+ **
+ **  @details            : 按块号整块读写：块号由 MiniFee_BlockIdType 枚举定义，块大小由
+ **                        MiniFee_BlockConfig[] 逐块配置；追加式写入 + RAM 块目录定位最新记录；
+ **                        迁移按块目录逐块拷贝每块最新记录到备用簇，整簇擦除回收。
+ **                        无 Valid/Invalid 标志、无 CLOSED 二次编程，任何区域仅一次编程。
+ **
+ **  @note               : RH850 数据 Flash 每个程序单元在两次擦除间仅可编程一次（无 1->0 二次编程），
+ **                        块内不得包含事后单独编程的标志页；旧记录仅能靠迁移时整簇擦除回收。
+ **
+ **  @revision           :
+ **  版本      日期          编写人        CR#      描述
+ **  --------  -----------   -----------   -------  ---------------------------------------------
+ **  V1.0      2026/09/10    Manco         N/A      初版发布
+ **  V1.1      2026/09/16    Manco         N/A      重构：RAM 块目录、一次性读写、迁移改写
+ **
+ ***********************************************************************************************************************/
+
+/* =================================================== inclusions =================================================== */
+
 #include "MiniFee.h"
 #include "MiniFlsIf.h"
 
-/**********************************************************************************************
-* 模块实现总览（阅读顺序建议）
-* --------------------------------------------------------------------------------------------
+/* =================================================== module overview ============================================== */
+/**
+ * @brief           模块实现总览（建议阅读顺序）。
+ * --------------------------------------------------------------------------------------------
 * 一、物理布局
 *   每个 Cluster（簇） = [8B 簇头][记录1][记录2]...[记录N][0xFF 空白...]
 *   簇头：Magic(4) + Generation(3, 大端) + CRC-8(1)；活动簇 = Magic 正确且 Generation 最大的簇。
@@ -76,17 +77,19 @@
  *   - 迁移只在“写前”擦除目标簇，源簇保留以便断电回退，待下次作为目标时再擦除。
  ***********************************************************************************************/
 
-/**********************************************************************************************
-* 内部宏
-***********************************************************************************************/
-/* FindAddr 类型 */
+/* ===================================================== macros ===================================================== */
+/**
+ * @brief           FindAddr 类型：读请求（不迁移）。
+ */
 #define FIND_TYPE_READ                   (0u)
+
+/**
+ * @brief           FindAddr 类型：写请求（空间不足/损坏时迁移）。
+ */
 #define FIND_TYPE_WRITE                  (1u)
 
-/**********************************************************************************************
-* 内部类型
-***********************************************************************************************/
-/* 主状态机：MiniFee_MainFunction 每次根据当前 state 调用对应的处理函数，
+/* ================================================ type definitions ================================================ */
+/** 主状态机：MiniFee_MainFunction 每次根据当前 state 调用对应的处理函数，
  * 处理函数内部可能发起一次 MiniFlsIf 异步操作并把 state 切到 FLS_WAIT；
  * FLS_WAIT 完成后经 flsWaitReturn 回到原流程继续推进。 */
 typedef enum
@@ -111,9 +114,11 @@ typedef enum
     MINIFEE_STATE_ERROR
 } MiniFee_StateType;
 
-/* FindAddr 子状态：ProcessFindAddr() 按该状态逐拍推进。
+/**
+ * @brief           FindAddr 子状态：ProcessFindAddr() 按该状态逐拍推进。
  * 每发起一次 Flash 读/写/擦除都会切到主状态 FLS_WAIT，完成后重新进入 FIND_PROC，
- * 因此子状态机必须自己记住“下一步该做什么”，不能依赖函数调用栈。 */
+ * 因此子状态机必须自己记住“下一步该做什么”，不能依赖函数调用栈。
+ */
 typedef enum
 {
     FIND_SUB_START = 0,                 /* 逐簇读取簇头 */
@@ -135,7 +140,9 @@ typedef enum
     FIND_SUB_DONE                       /* 子流程结束，回到 findReturnState */
 } MiniFee_FindSubState;
 
-/* 异步上下文（单一静态实例） */
+/**
+ * @brief           异步上下文（单一静态实例）
+ */
 typedef struct
 {
     /* 任务描述 */
@@ -210,14 +217,10 @@ typedef struct
     MiniFee_BlockHeaderType curHdr;
 } MiniFee_ContextType;
 
-/**********************************************************************************************
-* 局部数据
-***********************************************************************************************/
+/* ============================================ internal data definitions =========================================== */
 static MiniFee_ContextType MiniFee_Context;
 
-/**********************************************************************************************
-* 函数声明
-***********************************************************************************************/
+/* ========================================== internal function declarations ======================================== */
 static void  MiniFee_ResetContext(void);
 static void  MiniFee_ResetJob(void);
 static void  MiniFee_ClearDirMap(void);
@@ -226,14 +229,18 @@ static uint8 MiniFee_StartFlsWrite(uint32 offset, const uint8* src, uint32 len, 
 static uint8 MiniFee_StartFlsErase(uint32 offset, uint32 len, MiniFee_StateType retState);
 static void  HandleFlsWait(void);
 
-/* 簇头序列化/反序列化 */
+/**
+ * @brief           簇头序列化/反序列化
+ */
 static void  PackClusterHdr(uint32 gen, uint8* buf);
 static void  UnpackClusterHdr(const uint8* buf, uint32* magic, uint32* gen);
 static uint8  IsClusterHeaderValid(const uint8* hdrBuf);
 static uint32 ClusterHdrGen(const uint8* hdrBuf);
 static uint8 StartWriteClusterHdr(uint32 clusterIndex, MiniFee_FindSubState returnState);
 
-/* 块头序列化/反序列化 */
+/**
+ * @brief           块头序列化/反序列化
+ */
 static void  PackBlockHdr(const MiniFee_BlockHeaderType* hdr, uint8* buf);
 static void  UnpackBlockHdr(const uint8* buf, MiniFee_BlockHeaderType* hdr);
 static uint8  MiniFee_Crc8(const uint8* data, uint32 length);
@@ -241,33 +248,44 @@ static uint8  CalcBlockChecksum(const MiniFee_BlockHeaderType* hdr);
 static uint8  IsBlockHeaderValid(const uint8* hdrBuf);
 static uint8  IsAllFF(const uint8* buf, uint32 len);
 
-/* FindAddr 空间判断 */
+/**
+ * @brief           FindAddr 空间判断
+ */
 static uint32 MiniFee_NeededSpace(void);
 
-/* FindAddr / 簇选择 */
+/**
+ * @brief           FindAddr / 簇选择
+ */
 static void  StartFindAddr(MiniFee_StateType returnState, uint8 findType);
 static void  ProcessFindAddr(void);
 
-/* 辅助函数 */
+/**
+ * @brief           辅助函数
+ */
 static void  FinalizeOk(void);
 static void  FinalizeErr(void);
 
-/* 读流程 */
+/**
+ * @brief           读流程
+ */
 static void  HandleReadByDir(void);
 static void  HandleReadVerifyCopy(void);
 static void  HandleReadAllFill(void);
 
-/* 写流程 */
+/**
+ * @brief           写流程
+ */
 static void  HandleWriteMainLoopProc(void);
 static void  HandleWriteAllAppend(void);
 static void  PackNewRecord(uint32 block, uint32 len, const uint8* data);
 static const uint8* GetTargetData(uint32 block);
 
-/**********************************************************************************************
-* 局部函数
-***********************************************************************************************/
+/* ========================================== internal function definitions ========================================= */
 
-/* 复位异步上下文到 IDLE */
+/**
+ * @brief           复位异步上下文到 IDLE
+ * @return          void
+ */
 static void MiniFee_ResetContext(void)
 {
     CommF_DataSet(&MiniFee_Context, 0u, sizeof(MiniFee_ContextType));
@@ -275,9 +293,12 @@ static void MiniFee_ResetContext(void)
     MiniFee_Context.status = MINIFEE_STATUS_IDLE;
 }
 
-/* 复位“作业”相关字段，但保留块目录与活动簇/尾游标（供后续读/写走快路径）。
+/**
+ * @brief           复位“作业”相关字段，但保留块目录与活动簇/尾游标（供后续读/写走快路径）。
  * 块目录（dirOffset/dirValid/activeClusterx/headerEnd）跨作业保留，
- * 仅在 Init/DeInit 或重建目录时失效。 */
+ * 仅在 Init/DeInit 或重建目录时失效。
+ * @return          void
+ */
 static void MiniFee_ResetJob(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -318,7 +339,10 @@ static void MiniFee_ResetJob(void)
     c->status               = MINIFEE_STATUS_IDLE;
 }
 
-/* 清空块目录映射（每次重建目录前调用）：0xFFFFFFFF 表示该块当前簇内无记录 */
+/**
+ * @brief           清空块目录映射（每次重建目录前调用）：0xFFFFFFFF 表示该块当前簇内无记录
+ * @return          void
+ */
 static void MiniFee_ClearDirMap(void)
 {
     uint32 i;
@@ -328,7 +352,14 @@ static void MiniFee_ClearDirMap(void)
     }
 }
 
-/* 检查缓冲区是否全部为擦除态（0xFF） */
+/**
+ * @brief           检查缓冲区是否全部为擦除态（0xFF）
+ * @param[in]       buf: 待检查的缓冲。
+ * @param[in]       len: 待检查字节数。
+ * @return          uint8
+ * @retval          1: 全部为擦除值。
+ * @retval          0: 存在非擦除值。
+ */
 static uint8 IsAllFF(const uint8* buf, uint32 len)
 {
     uint32 i;
@@ -342,7 +373,12 @@ static uint8 IsAllFF(const uint8* buf, uint32 len)
     return 1u;
 }
 
-/* 序列化簇头（8 字节，大端序）：Magic(4)+Generation(3)+CheckSum(1) */
+/**
+ * @brief           序列化簇头（8 字节，大端序）：Magic(4)+Generation(3)+CheckSum(1)
+ * @param[in]       gen: 待写入的 Generation（0..0xFFFFFF）。
+ * @param[out]      buf: 目标缓冲，长度须 >= MINIFEE_CLUSTER_HEADER_SIZE。
+ * @return          void
+ */
 static void PackClusterHdr(uint32 gen, uint8* buf)
 {
     buf[0] = (uint8)((MINIFEE_CLUSTER_MAGIC >> 24) & 0xFFu);
@@ -355,7 +391,13 @@ static void PackClusterHdr(uint32 gen, uint8* buf)
     buf[7] = MiniFee_Crc8(buf, 7u);
 }
 
-/* 反序列化簇头（无 Status） */
+/**
+ * @brief           反序列化簇头（无 Status）
+ * @param[in]       buf: 簇头缓冲，长度须 >= MINIFEE_CLUSTER_HEADER_SIZE。
+ * @param[out]      magic: 解析出的 Magic。
+ * @param[out]      gen: 解析出的 Generation；无效时为 0xFFFFFFFF。
+ * @return          void
+ */
 static void UnpackClusterHdr(const uint8* buf, uint32* magic, uint32* gen)
 {
     *magic = ((uint32)buf[0] << 24) | ((uint32)buf[1] << 16)
@@ -363,7 +405,13 @@ static void UnpackClusterHdr(const uint8* buf, uint32* magic, uint32* gen)
     *gen   = ((uint32)buf[4] << 16) | ((uint32)buf[5] << 8) | (uint32)buf[6];
 }
 
-/* 从 8 字节簇头缓冲判定有效性（CRC-8 校验） */
+/**
+ * @brief           从 8 字节簇头缓冲判定有效性（CRC-8 校验）
+ * @param[in]       hdrBuf: 簇头缓冲。
+ * @return          uint8
+ * @retval          1: Magic 与 CRC-8 均正确。
+ * @retval          0: 无效。
+ */
 static uint8 IsClusterHeaderValid(const uint8* hdrBuf)
 {
     if (hdrBuf[7] != MiniFee_Crc8(hdrBuf, 7u))
@@ -373,7 +421,12 @@ static uint8 IsClusterHeaderValid(const uint8* hdrBuf)
     return 1u;
 }
 
-/* 解析簇头：CRC 与 Magic 均有效时返回 Generation（0..0xFFFFFF），否则返回 0xFFFFFFFF（无效） */
+/**
+ * @brief           解析簇头：CRC 与 Magic 均有效时返回 Generation（0..0xFFFFFF），否则返回 0xFFFFFFFF（无效）
+ * @param[in]       hdrBuf: 簇头缓冲。
+ * @return          uint32: 簇头 Generation（0..0xFFFFFF）。
+ * @retval          0xFFFFFFFF: Magic/CRC-8 无效。
+ */
 static uint32 ClusterHdrGen(const uint8* hdrBuf)
 {
     uint32 magic;
@@ -391,7 +444,12 @@ static uint32 ClusterHdrGen(const uint8* hdrBuf)
     return gen;
 }
 
-/* 序列化块头为 8 字节（大端序）：BlockNumber(3)+Length(4)+CheckSum(1)，无标志页 */
+/**
+ * @brief           序列化块头为 8 字节（大端序）：BlockNumber(3)+Length(4)+CheckSum(1)，无标志页
+ * @param[in]       hdr: 块头结构。
+ * @param[out]      buf: 目标缓冲，长度须 >= MINIFEE_BLOCK_HEADER_SIZE。
+ * @return          void
+ */
 static void PackBlockHdr(const MiniFee_BlockHeaderType* hdr, uint8* buf)
 {
     buf[0] = (uint8)((hdr->BlockNumber >> 16) & 0xFFu);
@@ -404,7 +462,12 @@ static void PackBlockHdr(const MiniFee_BlockHeaderType* hdr, uint8* buf)
     buf[7] = hdr->CheckSum;
 }
 
-/* 反序列化块头（8 字节，大端序）：BlockNumber(3)+Length(4)+CheckSum(1) */
+/**
+ * @brief           反序列化块头（8 字节，大端序）：BlockNumber(3)+Length(4)+CheckSum(1)
+ * @param[in]       buf: 块头缓冲，长度须 >= MINIFEE_BLOCK_HEADER_SIZE。
+ * @param[out]      hdr: 解析出的块头结构。
+ * @return          void
+ */
 static void UnpackBlockHdr(const uint8* buf, MiniFee_BlockHeaderType* hdr)
 {
     hdr->BlockNumber = ((uint32)buf[0] << 16) | ((uint32)buf[1] << 8) | (uint32)buf[2];
@@ -413,7 +476,12 @@ static void UnpackBlockHdr(const uint8* buf, MiniFee_BlockHeaderType* hdr)
     hdr->CheckSum    = buf[7];
 }
 
-/* CRC-8（多项式 0x07，初始值 0x00，不反相）：逐字节计算 */
+/**
+ * @brief           CRC-8（多项式 0x07，初始值 0x00，不反相）：逐字节计算
+ * @param[in]       data: 待计算数据。
+ * @param[in]       length: 数据字节数。
+ * @return          uint8: CRC-8 结果。
+ */
 static uint8 MiniFee_Crc8(const uint8* data, uint32 length)
 {
     uint8 crc = 0u;
@@ -438,7 +506,11 @@ static uint8 MiniFee_Crc8(const uint8* data, uint32 length)
     return crc;
 }
 
-/* 计算块头校验 = CRC-8（输入：BlockNumber(3 大端) + Length(4 大端)） */
+/**
+ * @brief           计算块头校验 = CRC-8（输入：BlockNumber(3 大端) + Length(4 大端)）
+ * @param[in]       hdr: 块头（使用其中 BlockNumber 与 Length）。
+ * @return          uint8: 块头 CRC-8 校验和。
+ */
 static uint8 CalcBlockChecksum(const MiniFee_BlockHeaderType* hdr)
 {
     uint8 buf[7];
@@ -454,7 +526,13 @@ static uint8 CalcBlockChecksum(const MiniFee_BlockHeaderType* hdr)
     return MiniFee_Crc8(buf, 7u);
 }
 
-/* 从 8 字节块头缓冲判定块有效性（仅校验和，无标志页） */
+/**
+ * @brief           从 8 字节块头缓冲判定块有效性（仅校验和，无标志页）
+ * @param[in]       hdrBuf: 块头缓冲。
+ * @return          uint8
+ * @retval          1: 块号、长度与 CRC-8 均合法。
+ * @retval          0: 无效。
+ */
 static uint8 IsBlockHeaderValid(const uint8* hdrBuf)
 {
     MiniFee_BlockHeaderType hdr;
@@ -467,7 +545,16 @@ static uint8 IsBlockHeaderValid(const uint8* hdrBuf)
     return 1u;
 }
 
-/* 发起 MiniFlsIf_Read 并切换到 FLS_WAIT */
+/**
+ * @brief           发起 MiniFlsIf_Read 并切换到 FLS_WAIT
+ * @param[in]       offset: 相对 Flash 基址的偏移量。
+ * @param[out]      buf: 目标缓冲。
+ * @param[in]       len: 读取字节数。
+ * @param[in]       retState: 读完成后要返回的主状态。
+ * @return          uint8
+ * @retval          E_OK: 请求已被底层接受。
+ * @retval          E_NOT_OK: 底层拒绝，已置 ERROR 状态。
+ */
 static uint8 MiniFee_StartFlsRead(uint32 offset, uint8* buf, uint32 len, MiniFee_StateType retState)
 {
     uint8 r = MiniFlsIf_Read(offset, buf, len);
@@ -481,7 +568,16 @@ static uint8 MiniFee_StartFlsRead(uint32 offset, uint8* buf, uint32 len, MiniFee
     return E_OK;
 }
 
-/* 发起 MiniFlsIf_Write 并切换到 FLS_WAIT */
+/**
+ * @brief           发起 MiniFlsIf_Write 并切换到 FLS_WAIT
+ * @param[in]       offset: 相对 Flash 基址的偏移量。
+ * @param[in]       src: 源缓冲；底层异步持有其指针，写完成前不可改写。
+ * @param[in]       len: 写入字节数。
+ * @param[in]       retState: 写完成后要返回的主状态。
+ * @return          uint8
+ * @retval          E_OK: 请求已被底层接受。
+ * @retval          E_NOT_OK: 底层拒绝，已置 ERROR 状态。
+ */
 static uint8 MiniFee_StartFlsWrite(uint32 offset, const uint8* src, uint32 len, MiniFee_StateType retState)
 {
     uint8 r = MiniFlsIf_Write(offset, src, len);
@@ -495,7 +591,15 @@ static uint8 MiniFee_StartFlsWrite(uint32 offset, const uint8* src, uint32 len, 
     return E_OK;
 }
 
-/* 发起 MiniFlsIf_Erase 并切换到 FLS_WAIT */
+/**
+ * @brief           发起 MiniFlsIf_Erase 并切换到 FLS_WAIT
+ * @param[in]       offset: 相对 Flash 基址的偏移量，须与擦除单元对齐。
+ * @param[in]       len: 擦除长度，须为擦除单元整数倍。
+ * @param[in]       retState: 擦除完成后要返回的主状态。
+ * @return          uint8
+ * @retval          E_OK: 请求已被底层接受。
+ * @retval          E_NOT_OK: 底层拒绝，已置 ERROR 状态。
+ */
 static uint8 MiniFee_StartFlsErase(uint32 offset, uint32 len, MiniFee_StateType retState)
 {
     uint8 r = MiniFlsIf_Erase(offset, len);
@@ -509,8 +613,15 @@ static uint8 MiniFee_StartFlsErase(uint32 offset, uint32 len, MiniFee_StateType 
     return E_OK;
 }
 
-/* 发起簇头写入：Generation 直接取活动簇缓存值 activeClusterGen +1（不再回读源簇头），
- * 组包到持久缓冲 writeHdrBuf 后异步写入目标簇头。 */
+/**
+ * @brief           发起簇头写入：Generation 直接取活动簇缓存值 activeClusterGen +1（不再回读源簇头），
+ * 组包到持久缓冲 writeHdrBuf 后异步写入目标簇头。
+ * @param[in]       clusterIndex: 目标簇下标。
+ * @param[in]       returnState: 簇头写完后的后续子状态。
+ * @return          uint8
+ * @retval          E_OK: 已发起异步写。
+ * @retval          E_NOT_OK: 底层拒绝。
+ */
 static uint8 StartWriteClusterHdr(uint32 clusterIndex, MiniFee_FindSubState returnState)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -531,7 +642,10 @@ static uint8 StartWriteClusterHdr(uint32 clusterIndex, MiniFee_FindSubState retu
     return E_OK;
 }
 
-/* FLS_WAIT 处理：仅查询 MiniFlsIf 状态（与平台 Flash 驱动解耦） */
+/**
+ * @brief           FLS_WAIT 处理：仅查询 MiniFlsIf 状态（与平台 Flash 驱动解耦）
+ * @return          void
+ */
 static void HandleFlsWait(void)
 {
     MemIf_StatusType flsStatus;
@@ -558,21 +672,30 @@ static void HandleFlsWait(void)
     MiniFee_Context.state = MiniFee_Context.flsWaitReturn;
 }
 
-/* 任务成功收尾：结果置 OK，状态机回 IDLE，等待上层查询或下一次请求 */
+/**
+ * @brief           任务成功收尾：结果置 OK，状态机回 IDLE，等待上层查询或下一次请求
+ * @return          void
+ */
 static void FinalizeOk(void)
 {
     MiniFee_Context.status = MINIFEE_STATUS_OK;
     MiniFee_Context.state  = MINIFEE_STATE_IDLE;
 }
 
-/* 任务失败收尾：结果置 NOT_OK，状态机回 IDLE（上层经 GetStatus 感知失败） */
+/**
+ * @brief           任务失败收尾：结果置 NOT_OK，状态机回 IDLE（上层经 GetStatus 感知失败）
+ * @return          void
+ */
 static void FinalizeErr(void)
 {
     MiniFee_Context.status = MINIFEE_STATUS_NOT_OK;
     MiniFee_Context.state  = MINIFEE_STATE_IDLE;
 }
 
-/* 本次作业所需的簇内空间：一次性写用预统计总量，单块读/写用单块记录大小 */
+/**
+ * @brief           本次作业所需的簇内空间：一次性写用预统计总量，单块读/写用单块记录大小
+ * @return          uint32: 本次作业所需的簇内空间（字节）。
+ */
 static uint32 MiniFee_NeededSpace(void)
 {
     return (MiniFee_Context.writeAllCallback != NULL_PTR)
@@ -580,7 +703,12 @@ static uint32 MiniFee_NeededSpace(void)
          : MINIFEE_BLOCK_TOTAL_OF(MiniFee_Context.blockSize);
 }
 
-/* 启动 FindAddr 子流程：记录完成后要返回的主状态 returnState，以及本次是读还是写 */
+/**
+ * @brief           启动 FindAddr 子流程：记录完成后要返回的主状态 returnState，以及本次是读还是写
+ * @param[in]       returnState: 子流程结束后返回的主状态。
+ * @param[in]       findType: FIND_TYPE_READ（读）或 FIND_TYPE_WRITE（写）。
+ * @return          void
+ */
 static void StartFindAddr(MiniFee_StateType returnState, uint8 findType)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -595,7 +723,10 @@ static void StartFindAddr(MiniFee_StateType returnState, uint8 findType)
     c->state                = MINIFEE_STATE_FIND_PROC;
 }
 
-/* 异步 FindAddr 子状态机：簇选择 + 目录构建扫描 + 迁移 */
+/**
+ * @brief           异步 FindAddr 子状态机：簇选择 + 目录构建扫描 + 迁移
+ * @return          void
+ */
 static void ProcessFindAddr(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -925,11 +1056,12 @@ static void ProcessFindAddr(void)
     }
 }
 
-/**********************************************************************************************
-* 读流程状态处理
-***********************************************************************************************/
-/* 单块读：按块目录直接读取目标块最新记录；无记录则返回全零。
- * 目录由 FindAddr 的目录构建扫描（冷路径）或上次操作（热路径）建立，无需再扫描记录头。 */
+/* ============================================= read sequence processing =========================================== */
+/**
+ * @brief           单块读：按块目录直接读取目标块最新记录；无记录则返回全零。
+ * 目录由 FindAddr 的目录构建扫描（冷路径）或上次操作（热路径）建立，无需再扫描记录头。
+ * @return          void
+ */
 static void HandleReadByDir(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -957,8 +1089,11 @@ static void HandleReadByDir(void)
     c->scanTargetFound = 1u;
 }
 
-/* 读流程：扫描已读到 blockDataBuf。若未找到目标记录则失败；
- * 找到则只把逻辑长度数据拷给用户 buf（物理对齐填充对上层隐藏）。 */
+/**
+ * @brief           读流程：扫描已读到 blockDataBuf。若未找到目标记录则失败；
+ * 找到则只把逻辑长度数据拷给用户 buf（物理对齐填充对上层隐藏）。
+ * @return          void
+ */
 static void HandleReadVerifyCopy(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -974,9 +1109,12 @@ static void HandleReadVerifyCopy(void)
     c->state = MINIFEE_STATE_READ_DONE;
 }
 
-/* 一次性读：按块目录逐块读取每块“最新记录”并回调交付（不再读被覆盖的旧记录）。
+/**
+ * @brief           一次性读：按块目录逐块读取每块“最新记录”并回调交付（不再读被覆盖的旧记录）。
  * 目录由 FindAddr 构建；scanPhase=1 表示上一次数据读已完成、待交付。
- * 相比“逐条记录读数据”的实现，少读被覆盖的旧记录，进一步减少 Fls 读次数。 */
+ * 相比“逐条记录读数据”的实现，少读被覆盖的旧记录，进一步减少 Fls 读次数。
+ * @return          void
+ */
 static void HandleReadAllFill(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1022,11 +1160,15 @@ static void HandleReadAllFill(void)
     c->state = MINIFEE_STATE_READ_DONE;
 }
 
-/**********************************************************************************************
-* 写流程状态处理
-***********************************************************************************************/
-/* 组装“新数据”记录到 writeBuf：块头（Length=逻辑长度、CRC-8）+ 数据 + 0 填充（不含 Fls 操作）。
- * 单块写、一次性写、迁移即写入共用。 */
+/* ============================================= write sequence processing ========================================== */
+/**
+ * @brief           组装“新数据”记录到 writeBuf：块头（Length=逻辑长度、CRC-8）+ 数据 + 0 填充（不含 Fls 操作）。
+ * 单块写、一次性写、迁移即写入共用。
+ * @param[in]       block: 逻辑块号。
+ * @param[in]       len: 逻辑数据长度。
+ * @param[in]       data: 待写入数据，长度须 >= len。
+ * @return          void
+ */
 static void PackNewRecord(uint32 block, uint32 len, const uint8* data)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1040,8 +1182,13 @@ static void PackNewRecord(uint32 block, uint32 len, const uint8* data)
     CommF_DataSet(&c->jobBuf.writeBuf[MINIFEE_BLOCK_HEADER_SIZE + len], 0u, lenAligned - len);
 }
 
-/* 取本次作业要写入该块的新数据指针：NULL 表示本次作业不写该块。
- * 单块写取目标块 buf；一次性写以取数回调返回非 NULL 为准（回调须稳定，见头文件约定）。 */
+/**
+ * @brief           取本次作业要写入该块的新数据指针：NULL 表示本次作业不写该块。
+ * 单块写取目标块 buf；一次性写以取数回调返回非 NULL 为准（回调须稳定，见头文件约定）。
+ * @param[in]       block: 逻辑块号。
+ * @return          const uint8*: 该块待写数据指针。
+ * @retval          NULL_PTR: 本次作业不写该块。
+ */
 static const uint8* GetTargetData(uint32 block)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1052,7 +1199,10 @@ static const uint8* GetTargetData(uint32 block)
     return (c->blockNumber == block) ? c->buf : NULL_PTR;
 }
 
-/* 组装块头+数据并单次追加写入活动簇 headerEnd 处（不与旧记录比对：脏块过滤由上层 MiniNvm 完成）。 */
+/**
+ * @brief           组装块头+数据并单次追加写入活动簇 headerEnd 处（不与旧记录比对：脏块过滤由上层 MiniNvm 完成）。
+ * @return          void
+ */
 static void HandleWriteMainLoopProc(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1074,10 +1224,13 @@ static void HandleWriteMainLoopProc(void)
     }
 }
 
-/* 一次性写：选簇后按块号顺序向回调取数并连续追加记录。
+/**
+ * @brief           一次性写：选簇后按块号顺序向回调取数并连续追加记录。
  * 每写一条即更新 headerEnd/块目录并前移游标，异步写完成后经 FLS_WAIT 回到本态继续。
  * 空间已在 FindAddr 阶段按 bulkWriteNeeded 预检（不足则先迁移），此处不再逐条判断。
- * writeAllBlock：当前待处理块号游标 0..MINIFEE_BLOCK_COUNT。 */
+ * writeAllBlock：当前待处理块号游标 0..MINIFEE_BLOCK_COUNT。
+ * @return          void
+ */
 static void HandleWriteAllAppend(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1125,20 +1278,29 @@ static void HandleWriteAllAppend(void)
     c->state = MINIFEE_STATE_WRITE_DONE;
 }
 
-/**********************************************************************************************
-* 对外接口
-***********************************************************************************************/
+/* ========================================== external function definitions ========================================= */
 
-/* 初始化：初始化底层 Flash 适配层，并把上下文复位到 IDLE */
+/**
+ * @brief           初始化 MiniFlsIf 并把上下文复位到 IDLE。
+ * @return          void
+ */
 void MiniFee_Init(void)
 {
     (void)MiniFlsIf_Init();
     MiniFee_ResetContext();
 }
 
-/* 发起异步读：参数校验通过后记录目标块与逻辑/物理长度；若块目录已就绪则直接按目录读
+/**
+ * @brief           发起异步读：参数校验通过后记录目标块与逻辑/物理长度；若块目录已就绪则直接按目录读
  * （1 次 Fls 读），否则先 FindAddr 单遍扫描构建目录。E_OK 仅表示请求被接受，结果经 GetStatus 查询。
- * 校验项：非 BUSY、buf 非空、块号合法且枚举值与下标一致、size 等于配置长度。 */
+ * 校验项：非 BUSY、buf 非空、块号合法且枚举值与下标一致、size 等于配置长度。
+ * @param[in]       blockNumber: 目标块号（MiniFee_BlockIdType）。
+ * @param[in]       size: 逻辑长度，须等于 MiniFee_BlockConfig[blockNumber].Length。
+ * @param[out]      buf: 目标缓冲，长度须 >= size。
+ * @return          uint8
+ * @retval          E_OK: 请求已被接受（不代表完成）。
+ * @retval          E_NOT_OK: 参数非法或模块忙。
+ */
 uint8 MiniFee_Read(MiniFee_BlockIdType blockNumber, uint32 size, uint8* buf)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1187,9 +1349,15 @@ uint8 MiniFee_Read(MiniFee_BlockIdType blockNumber, uint32 size, uint8* buf)
     return E_OK;
 }
 
-/* 发起异步“一次性读全部块”：构建/复用块目录后，逐块读取每块最新记录并回调交付。
+/**
+ * @brief           发起异步“一次性读全部块”：构建/复用块目录后，逐块读取每块最新记录并回调交付。
  * 校验：非 BUSY、回调非空。目录就绪时直接读（每块 1 次 Fls 读）；否则先单遍扫描构建目录。
- * 空白 Flash 时目录为空、回调不被触发（由上层保持默认值）。E_OK 仅表示请求被接受。 */
+ * 空白 Flash 时目录为空、回调不被触发（由上层保持默认值）。E_OK 仅表示请求被接受。
+ * @param[in]       callback: 逐条记录交付回调。
+ * @return          uint8
+ * @retval          E_OK: 请求已被接受（不代表完成）。
+ * @retval          E_NOT_OK: 回调为空或模块忙。
+ */
 uint8 MiniFee_ReadAll(MiniFee_ReadAllCallbackType callback)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1217,9 +1385,15 @@ uint8 MiniFee_ReadAll(MiniFee_ReadAllCallbackType callback)
     return E_OK;
 }
 
-/* 发起异步“一次性写全部块”：先经回调预统计全部待写记录的总占用，再单遍 FindAddr 选簇
+/**
+ * @brief           发起异步“一次性写全部块”：先经回调预统计全部待写记录的总占用，再单遍 FindAddr 选簇
  * （空间不足则一次性迁移），随后按块号顺序连续追加所有待写记录，避免逐块 FindAddr/比对。
- * 校验：非 BUSY、回调非空。回调返回 NULL 的块跳过。E_OK 仅表示请求被接受，结果经 GetStatus 查询。 */
+ * 校验：非 BUSY、回调非空。回调返回 NULL 的块跳过。E_OK 仅表示请求被接受，结果经 GetStatus 查询。
+ * @param[in]       callback: 取数回调，返回非 NULL_PTR 的块才会被写入。
+ * @return          uint8
+ * @retval          E_OK: 请求已被接受（不代表完成）；无待写块时直接返回。
+ * @retval          E_NOT_OK: 回调为空或模块忙。
+ */
 uint8 MiniFee_WriteAll(MiniFee_WriteAllDataCallbackType callback)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1268,8 +1442,16 @@ uint8 MiniFee_WriteAll(MiniFee_WriteAllDataCallbackType callback)
     return E_OK;
 }
 
-/* 发起异步写：校验规则同 Read。目录已就绪且空间足够时直接进入比对/追加（旧数据读 1 次）；
- * 否则先 FindAddr 选簇/迁移/构建目录。E_OK 仅表示请求被接受，结果经 GetStatus 查询。 */
+/**
+ * @brief           发起异步写：校验规则同 Read。目录已就绪且空间足够时直接进入比对/追加（旧数据读 1 次）；
+ * 否则先 FindAddr 选簇/迁移/构建目录。E_OK 仅表示请求被接受，结果经 GetStatus 查询。
+ * @param[in]       blockNumber: 目标块号（MiniFee_BlockIdType）。
+ * @param[in]       size: 逻辑长度，须等于 MiniFee_BlockConfig[blockNumber].Length。
+ * @param[in]       buf: 源数据；作业期间须保持有效。
+ * @return          uint8
+ * @retval          E_OK: 请求已被接受（不代表完成）。
+ * @retval          E_NOT_OK: 参数非法或模块忙。
+ */
 uint8 MiniFee_Write(MiniFee_BlockIdType blockNumber, uint32 size, uint8* buf)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1320,8 +1502,13 @@ uint8 MiniFee_Write(MiniFee_BlockIdType blockNumber, uint32 size, uint8* buf)
     return E_OK;
 }
 
-/* 取消当前异步任务：仅在 BUSY 时有效，置 NOT_OK 并回到 IDLE。
- * 注意：不撤销已在底层进行的 Flash 操作，仅让上层尽快看到失败结果。 */
+/**
+ * @brief           取消当前异步任务：仅在 BUSY 时有效，置 NOT_OK 并回到 IDLE。
+ * 注意：不撤销已在底层进行的 Flash 操作，仅让上层尽快看到失败结果。
+ * @return          uint8
+ * @retval          E_OK: 已取消，结果置 NOT_OK。
+ * @retval          E_NOT_OK: 当前非 BUSY。
+ */
 uint8 MiniFee_Cancel(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1336,8 +1523,11 @@ uint8 MiniFee_Cancel(void)
     return E_OK;
 }
 
-/* 状态机主入口：由调用方周期调度（在 MiniFlsIf_MainFunction 之后）。
- * 每次只根据当前 state 推进一步；IDLE 时直接返回，不阻塞等待 Flash。 */
+/**
+ * @brief           状态机主入口：由调用方周期调度（在 MiniFlsIf_MainFunction 之后）。
+ * 每次只根据当前 state 推进一步；IDLE 时直接返回，不阻塞等待 Flash。
+ * @return          void
+ */
 void MiniFee_MainFunction(void)
 {
     MiniFee_ContextType* c = &MiniFee_Context;
@@ -1392,7 +1582,10 @@ void MiniFee_MainFunction(void)
     }
 }
 
-/* 查询最近一次任务状态：IDLE / BUSY / OK / NOT_OK */
+/**
+ * @brief           查询最近一次任务状态：IDLE / BUSY / OK / NOT_OK
+ * @return          MiniFee_StatusType: IDLE / BUSY / OK / NOT_OK。
+ */
 MiniFee_StatusType MiniFee_GetStatus(void)
 {
     return MiniFee_Context.status;
