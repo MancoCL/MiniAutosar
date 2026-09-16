@@ -6,8 +6,8 @@
 | 所属层级 | BSW / SystemServices / BootServices |
 | 上层模块 | MiniFee |
 | 下层模块 | Fls MCAL（或其他 Flash 驱动） |
-| 设计版本 | V1.0 |
-| 作者 | CaoLiang |
+| 设计版本 | V1.1 |
+| 作者 | Manco |
 | 描述 | 初版发布：MiniFee 与底层 Flash 驱动之间的异步平台适配层 |
 
 ## 1. 模块概述
@@ -65,6 +65,13 @@ Fls MCAL 或其他 Flash 驱动
 | `MiniFlsIf_GetStatus` | `MemIf_StatusType MiniFlsIf_GetStatus(void)` | 查询底层任务状态（`MEMIF_UNINIT / IDLE / BUSY / BUSY_INTERNAL`） |
 | `MiniFlsIf_GetJobResult` | `MemIf_JobResultType MiniFlsIf_GetJobResult(void)` | 查询最近一次任务结果（`MEMIF_JOB_OK / FAILED / PENDING / CANCELED / ...`） |
 | `MiniFlsIf_MainFunction` | `void MiniFlsIf_MainFunction(void)` | 周期推进底层 Flash 异步任务，转发 `Fls_MainFunction` |
+
+**配置项说明：** MiniFlsIf **没有自有配置宏**，接口本身不携带任何项目确定值；相关参数全部由目标工程决定：
+
+| 项 | 性质 | 取值依据 |
+| --- | --- | --- |
+| `offset` 基准 | 平台相关 | 传入的 `offset` 一律为“绝对地址 − Flash 基址”；该基址由 MiniFee 的 `MINIFEE_FLS_BASE` 决定，必须与目标驱动的地址基址一致 |
+| Fls 配置集（如 `FlsConfigSet`） | 平台相关 | 地址范围、擦除单元、写单元由目标工程 Fls 配置决定，必须与 MiniFee 的 `MiniFee_ClusterConfig[]`（地址/长度）和 `MINIFEE_VIRTUALPAGE_SIZE`（写粒度）匹配 |
 
 **语义约定：**
 

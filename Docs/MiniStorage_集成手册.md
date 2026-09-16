@@ -4,8 +4,8 @@
 | --- | --- |
 | 文档名称 | MiniFee / MiniNvm / MiniFlsIf 集成手册 |
 | 适用模块 | MiniFee、MiniNvm、MiniFlsIf |
-| 设计版本 | V1.0 |
-| 作者 | CaoLiang |
+| 设计版本 | V1.1 |
+| 作者 | Manco |
 | 目标 | 使三个模块能够快速移植到其他工程 / 平台，并说明全部可配置项的功能与注意事项 |
 
 ---
@@ -102,7 +102,7 @@ if (MiniNvm_WriteBlock(1u, buf) == E_OK)
         MiniNvm_MainFunction();
         (void)MiniNvm_GetErrorStatus(1u, &r);
     } while (r == MININVM_REQ_PENDING);
-    /* r 为 MININVM_REQ_OK / NOT_OK / RESTORED_FROM_ROM */
+    /* r 为 MININVM_REQ_OK / NOT_OK */
 }
 
 /* 单块读 */
@@ -113,7 +113,15 @@ MiniNvm_WriteAll();
 MiniNvm_ReadAll();
 ```
 
-> 注意：`MiniNvm_WriteBlock` 在**入队时**即复制源数据，入队返回后可立即复用源缓冲；`MiniNvm_ReadBlock` 的数据在作业完成后才写入目标缓冲。
+> 注意：`MiniNvm_WriteBlock` 先与当前 RAM buffer 比对：**一致则直接返回 `E_OK`（不置脏、不入队）**；不一致才入队，并在**入队时**即把源数据快照进共享缓冲，入队返回后可立即复用源缓冲。`MiniNvm_WriteAll` 的源为各块 RAM buffer，出队启动时才快照；`MiniNvm_ReadBlock` 的数据在作业完成后才写入目标缓冲。
+>
+> 注意：`MiniNvm_WriteAll` 只落盘**脏块**（无脏块时不写入）。运行期修改必须经 `MiniNvm_WriteRam`（会置脏）；直接经 `MiniNvm_GetRamBuffer` 改写 RAM buffer 不会置脏，不会被落盘。
+>
+> 注意：`MiniNvm_ReadAll` 采用**一次性读**——先清零全部 RAM buffer，再由 `MiniFee_ReadAll` 构建/复用**块目录**后逐块读取每块最新记录填入（无记录块保持全零）；比逐块读少扫很多遍块头，效率更高。
+>
+> 注意：`MiniFee` 在 RAM 维护**块目录**（块号 → 最新记录偏移）并缓存活动簇 Generation。冷启动首次读/写构建一次目录，之后单块读仅 1 次数据读、写入 0 读（直接追加，去重由 MiniNvm 完成）；追加写/迁移时更新目录，写簇头不再回读源簇头。
+>
+> 注意：`MiniNvm_WriteAll` 采用**一次性写**——先统计有无脏块（无则直接成功），再由 `MiniFee_WriteAll` 单遍选簇（空间不足则一次性迁移）后按块号连续追加全部脏块记录；比逐块写少做很多遍选簇扫描。
 
 ---
 
@@ -121,9 +129,9 @@ MiniNvm_ReadAll();
 
 ### 4.1 MiniFlsIf 平台映射（`MiniFlsIf.c`）
 
-| 配置/映射 | 当前值 | 功能与注意事项 |
+| 配置/映射 | 映射说明 | 功能与注意事项 |
 | --- | --- | --- |
-| `MiniFlsIf_Init` | `Fls_Init(FlsConfigSet)` | 初始化底层 Flash。目标平台若需时钟/控制器使能，请在此补充 |
+| `MiniFlsIf_Init` | 调用底层 Fls 初始化 | 初始化底层 Flash；目标平台若需时钟/控制器使能，请在此补充 |
 | `MiniFlsIf_Read/Write/Erase` | 转发 `Fls_Read/Write/Erase` | **必须保持异步**；若目标驱动为同步，需在适配层内实现异步状态机，否则会破坏 MiniFee 非阻塞假设 |
 | `MiniFlsIf_GetStatus/GetJobResult` | 转发 `Fls_GetStatus/GetJobResult` | 若目标驱动无 `MemIf` 风格状态，需在适配层维护状态机并映射为 `MemIf_*` 枚举 |
 | `MiniFlsIf_MainFunction` | `Fls_MainFunction` | 周期推进底层任务 |
@@ -132,11 +140,11 @@ MiniNvm_ReadAll();
 
 ### 4.2 `MiniFee_Cfg.h` 配置宏
 
-| 宏 | 当前值 | 功能 | 约束与注意事项 |
+| 宏 | 性质 | 功能 | 取值依据 / 约束 |
 | --- | --- | --- | --- |
-| `MINIFEE_FLS_BASE` | `0xFF200000UL` | Flash 地址基址。MiniFee 内部偏移 = 绝对地址 − 该基址 | 必须等于底层 Fls 驱动的地址基址，否则所有读写擦都会指向错误位置 |
-| `MINIFEE_VIRTUALPAGE_SIZE` | `4u` | Flash 最小写入单元，用于数据物理对齐 | 必须等于底层 Fls 的写粒度；记录物理步长 = `8 + align(Length, 此值)`；过大会浪费空间，过小会违反 Flash 编程约束 |
-| `MINIFEE_MAX_BLOCK_DATA_SIZE` | `880u` | 单块数据缓冲上限，内部 `blockDataBuf` / `writeBuf` 按此定容 | 必须 ≥ 所有块 `Length` 最大值；直接决定 RAM 占用，改小会截断大数据块 |
+| `MINIFEE_FLS_BASE` | 平台相关 | Flash 地址基址。MiniFee 内部偏移 = 绝对地址 − 该基址 | 无固定值，由目标 Flash 映射决定；必须等于底层 Fls 驱动的地址基址，否则所有读写擦都会指向错误位置 |
+| `MINIFEE_VIRTUALPAGE_SIZE` | 平台相关 | Flash 最小写入单元，用于数据物理对齐 | 无固定值，由目标 Flash 特性决定；必须等于底层 Fls 的写粒度；记录物理步长 = `MINIFEE_BLOCK_TOTAL_OF(MINIFEE_ALIGN_LEN(Length))`；过大会浪费簇空间，过小会违反 Flash 编程约束 |
+| `MINIFEE_MAX_BLOCK_DATA_SIZE` | 内存相关 | 单块数据缓冲上限，内部读缓冲 `blockDataBuf` 与写缓冲 `writeBuf`（二者共用一个 `union`）按此定容 | 无固定值，由业务块表决定；必须 ≥ 所有块 `Length` 最大值；直接决定 RAM 占用，改小会截断大数据块 |
 
 ### 4.3 块配置（`MiniFee_BlockIdType` + `MiniFee_BlockConfig[]`）
 
@@ -145,7 +153,7 @@ MiniNvm_ReadAll();
 | `MiniFee_BlockIdType` 枚举 | 定义逻辑块号 | `BlockNumber` 必须等于数组下标（0..N−1）；哨兵 `MINIFEE_BLOCK_MAX` 必须置于最后，`MINIFEE_BLOCK_COUNT` 由其自动推导 |
 | `MiniFee_BlockConfig[].BlockNumber` | 块号 | 必须等于数组下标，`MiniFee_Read/Write` 会校验 |
 | `MiniFee_BlockConfig[].Length` | 该块逻辑数据长度 | 调用 `MiniFee_Read/Write` 时 `size` 必须严格等于此值；`0` 表示空块（不占存储） |
-| `MINIFEE_BLOCK_COUNT` | 块总数 | 由枚举哨兵推导，同时决定迁移去重位图大小（每块 1 bit） |
+| `MINIFEE_BLOCK_COUNT` | 块总数 | 由枚举哨兵推导，同时决定块目录 `dirOffset[]` 大小 |
 
 **新增/删除块步骤：**
 
@@ -156,35 +164,35 @@ MiniNvm_ReadAll();
 
 ### 4.4 簇配置（`MiniFee_ClusterConfig[]` + `MINIFEE_CLUSTER_COUNT`）
 
-| 项 | 当前值 | 功能 | 约束与注意事项 |
+| 项 | 性质 | 功能 | 取值依据 / 约束 |
 | --- | --- | --- | --- |
-| `StartAddress` | `0xFF200000` / `0xFF202000` | 簇起始绝对地址 | 必须与 Flash 擦除单元对齐 |
-| `Length` | `0x2000` / `0x2000` | 簇长度 | 必须为擦除单元整数倍；两簇**不可重叠**，且不能覆盖其他数据区 |
-| `MINIFEE_CLUSTER_COUNT` | `2u` | 簇数量 | **必须 ≥ 2** 才能支持迁移轮换；必须与 `MiniFee_ClusterConfig[]` 条目数一致 |
+| `StartAddress` | 项目数据 | 簇起始绝对地址 | 无固定值，在目标 Flash 中选定；必须与 Flash 擦除单元对齐 |
+| `Length` | 项目数据 | 簇长度 | 无固定值，按容量需求选定；必须为擦除单元整数倍；各簇**不可重叠**，且不能覆盖其他数据区 |
+| `MINIFEE_CLUSTER_COUNT` | 由配置推导 | 簇数量 | 必须等于 `MiniFee_ClusterConfig[]` 条目数，且 **≥ 2** 才能支持迁移轮换 |
 
-**容量规划：** 每个簇需容纳“全部块各一条最新记录”。粗略需求：
+**容量规划：** 每个簇需容纳“全部块各一条最新记录”。需求：
 
 ```text
-单簇最小长度 ≥ 簇头(8) + Σ( 8 + align(各块Length) ) × 安全系数
+单簇最小长度 ≥ MINIFEE_CLUSTER_HEADER_SIZE
+             + Σ MINIFEE_BLOCK_TOTAL_OF(MINIFEE_ALIGN_LEN(各块 Length))
+单簇建议长度 ≥ 上式 × 安全系数（建议 ≥ 2）
 ```
 
-空间不足时 MiniFee 会触发迁移，但迁移后仍不足会返回失败。建议预留 ≥ 2 倍。
+空间不足时 MiniFee 会触发迁移：按块单遍重写到目标簇，**本次作业要覆盖的块直接写新数据（只写一次）**、其余块搬运旧记录；目标簇容量不足（配置错误）时返回失败。建议单簇预留 ≥ 2 倍。
 
 ### 4.5 MiniNvm 配置（`MiniNvm_Cfg.h` / `MiniNvm_Cfg.c`）
 
-| 配置 | 当前值 | 功能 | 约束与注意事项 |
+| 配置 | 性质 | 功能 | 取值依据 / 约束 |
 | --- | --- | --- | --- |
-| `MININVM_BLOCK_COUNT` | `MINIFEE_BLOCK_MAX` | 逻辑块数量 | 跟随 MiniFee，不要单独修改 |
-| `MININVM_MAX_BLOCK_LENGTH` | `MINIFEE_MAX_BLOCK_DATA_SIZE` | 单块最大长度 | 跟随 MiniFee |
-| `MININVM_QUEUE_SIZE` | `MININVM_BLOCK_COUNT` | 请求队列容量 | 需 ≥ 块数才能一次 `ReadAll`/`WriteAll` 全量入队；**每个队列条目内嵌最大块缓冲，RAM 开销 = 队列长度 × (MAX_BLOCK_LENGTH + 元数据)**，详见第 6 节 |
-| `MiniNvm_RamBlock_N[]` | 各块独立 RAM buffer | 上层数据实际存放处 | 长度必须等于对应块 `Length`；`RamBlockAddress` 不可为空 |
-| `MiniNvm_BlockDescriptor[].BlockId` | 1..N | MiniNvm 块号（**从 1 开始**） | 必须等于下标 + 1 |
-| `MiniNvm_BlockDescriptor[].MiniFeeBlockId` | 0..N−1 | 对应 MiniFee 块号（**从 0 开始**） | 必须等于下标，与 MiniFee 块配置一一对应 |
-| `MiniNvm_BlockDescriptor[].Length` | 各块长度 | 逻辑长度 | 必须等于对应 `MiniFee_BlockConfig[].Length` |
-| `MiniNvm_BlockDescriptor[].RomBlockAddress` | `NULL_PTR` | 可选 ROM 默认值地址 | 读取失败且无回调时，无法恢复则结果 `NOT_OK` |
-| `MiniNvm_BlockDescriptor[].InitBlockCallback` | `NULL_PTR` | 可选默认值初始化回调 | 原型 `Std_ReturnType (*)(uint8 blockId, uint8* ramPtr)` |
+| `MININVM_BLOCK_COUNT` | 由配置推导 | 逻辑块数量 | = MiniFee 块总数，跟随 MiniFee，不要单独修改 |
+| `MININVM_MAX_BLOCK_LENGTH` | 由配置推导 | 单块最大长度 | = `MINIFEE_MAX_BLOCK_DATA_SIZE`，跟随 MiniFee |
+| `MININVM_QUEUE_SIZE` | **用户自定义** | 请求队列容量 | **与块数、块长等其它参数没有必然关系**：它只约束“同一时刻排队等待处理的单块 `ReadBlock`/`WriteBlock` 请求数”（`ReadAll`/`WriteAll` 为一次性作业，不经队列，规模再大也不占队列）。取值依据 = 上层最坏并发单块请求数：取小了队满会返回 `E_NOT_OK`，取大了只是多占 RAM（每条目一份元数据）。**队列条目仅含元数据，读/写数据共用上下文单一共享数据缓冲**，详见第 6 节 |
+| `MiniNvm_RamBlock_N[]` | 项目数据 | 上层数据实际存放处 | 长度必须等于对应块 `Length`；`RamBlockAddress` 不可为空 |
+| `MiniNvm_BlockDescriptor[].BlockId` | 由配置推导 | MiniNvm 块号（**从 1 开始**） | 必须等于下标 + 1 |
+| `MiniNvm_BlockDescriptor[].MiniFeeBlockId` | 由配置推导 | 对应 MiniFee 块号（**从 0 开始**） | 必须等于下标，与 MiniFee 块配置一一对应 |
+| `MiniNvm_BlockDescriptor[].Length` | 由配置推导 | 逻辑长度 | 必须等于对应 `MiniFee_BlockConfig[].Length` |
 
-> `MiniNvm_Init` 会逐项校验：`BlockId == 下标+1`、`MiniFeeBlockId == 下标`、`Length == MiniFee_BlockConfig[下标].Length`、`Length ≤ MAX_BLOCK_LENGTH`、`RamBlockAddress != NULL`。任一不满足则模块保持 `UNINIT`，所有请求返回 `E_NOT_OK`。
+> `MiniNvm_Init` 会逐项校验：`BlockId == 下标+1`、`MiniFeeBlockId == 下标`、`Length == MiniFee_BlockConfig[下标].Length`、`Length ≤ MAX_BLOCK_LENGTH`、`RamBlockAddress != NULL`。任一不满足则模块不初始化（拒绝所有请求，返回 `E_NOT_OK`）。
 
 ---
 
@@ -197,10 +205,11 @@ MiniNvm_ReadAll();
 5. **确定写粒度**：设置 `MINIFEE_VIRTUALPAGE_SIZE` 等于 Fls 写单元；
 6. **定义块表**：按业务定义 `MiniFee_BlockIdType` / `MiniFee_BlockConfig[]`，同步 `MiniNvm` 描述符与 RAM buffer；
 7. **设置上限**：`MINIFEE_MAX_BLOCK_DATA_SIZE` ≥ 最大块长；
-8. **接入调度**：在周期任务中按 `MiniFlsIf → MiniFee → MiniNvm` 顺序调用 MainFunction；
-9. **初始化**：调用 `MiniNvm_Init()`（或 `MiniFee_Init()`）；
-10. **移除自检**：删除对 `MiniNvm_Test()` 的调用（若原工程引入了测试代码）；
-11. **验证**：烧录后执行读写，确认 `GetStatus/GetErrorStatus` 返回预期结果，并检查 map 中的 RAM 占用。
+8. **设置队列容量**：按上层最坏并发单块请求数设置 `MININVM_QUEUE_SIZE`（与块数无关）；
+9. **接入调度**：在周期任务中按 `MiniFlsIf → MiniFee → MiniNvm` 顺序调用 MainFunction；
+10. **初始化**：调用 `MiniNvm_Init()`（或 `MiniFee_Init()`）；
+11. **移除自检**：删除对 `MiniNvm_Test()` 的调用（若原工程引入了测试代码）；
+12. **验证**：烧录后执行读写，确认 `GetStatus/GetErrorStatus` 返回预期结果，并检查 map 中的 RAM 占用。
 
 ### 5.1 移植检查清单
 
@@ -212,6 +221,7 @@ MiniNvm_ReadAll();
 - [ ] `MINIFEE_MAX_BLOCK_DATA_SIZE` ≥ 最大块长
 - [ ] MiniNvm 描述符数量/顺序/长度与 MiniFee 块表一一对应
 - [ ] `MiniNvm_RamBlock_N` 长度等于对应块长
+- [ ] `MININVM_QUEUE_SIZE` 按上层最坏并发单块请求数取值（与块数无关）
 - [ ] 周期任务按正确顺序调用三个 MainFunction
 - [ ] 已移除 `MiniNvm_Test()` 等破坏性自检调用
 
@@ -222,14 +232,16 @@ MiniNvm_ReadAll();
 | 模块 | 主要 RAM 开销 | 说明 |
 | --- | --- | --- |
 | MiniFlsIf | 无（仅转发） | — |
-| MiniFee | 约 1.8 KB + 标量 | 含 `blockDataBuf`(880) + `writeBuf`(888) + 迁移位图等，随 `MINIFEE_MAX_BLOCK_DATA_SIZE` 与 `MINIFEE_BLOCK_COUNT` 变化 |
-| MiniNvm | **约 `MININVM_QUEUE_SIZE × (MININVM_MAX_BLOCK_LENGTH + 元数据)`** | 队列每条目内嵌最大块缓冲，当前 58 × ~888 B ≈ **51 KB**，移植到 RAM 受限平台时须重点评估 |
+| MiniFee | `MINIFEE_BLOCK_HEADER_SIZE + MINIFEE_MAX_BLOCK_DATA_SIZE`（读/写缓冲共用 `jobBuf` 联合体，取较大者）+ `4 × MINIFEE_BLOCK_COUNT`（块目录）+ 固定标量 | 随最大块长与块数变化；簇配置不影响 RAM |
+| MiniNvm | `MININVM_MAX_BLOCK_LENGTH`（`DataBuf`）+ `MININVM_QUEUE_SIZE × sizeof(队列条目)` + `MININVM_BLOCK_COUNT × (结果枚举 + 脏标记)` + 固定标量 | **不含**各块 `MiniNvm_RamBlock_N` 数据本体（另计 Σ 各块 `Length`） |
 
 **RAM 受限时的取舍：**
 
-- 减小 `MININVM_QUEUE_SIZE` 可显著降低 RAM，但此时 `ReadAll`/`WriteAll` 无法一次全量入队（`StartAll` 会因队列满返回 `E_NOT_OK`），需改为分批调用；
+- `MININVM_QUEUE_SIZE` 是**唯一纯用户自定义项**（与块数/块长无关），按上层最坏并发单块请求数取小值即可；`ReadAll`/`WriteAll` 采用一次性读/写、不经队列，不受影响；
+- MiniFee 读/写缓冲已合并为 `union`（读作业与写作业互斥，不并发），无需额外取舍；
 - 减小 `MINIFEE_MAX_BLOCK_DATA_SIZE` 会截断超过该值的块，必须同时保证 ≥ 最大块长；
-- 若只使用 MiniFee 而不使用 MiniNvm，可省去整个队列开销。
+- 减少块数会同时降低 `dirOffset[]`、`BlockResult[]`、`Dirty[]` 与各块 RAM buffer 开销；
+- 若只使用 MiniFee 而不使用 MiniNvm，可省去整个队列与描述符开销。
 
 ---
 
@@ -238,15 +250,16 @@ MiniNvm_ReadAll();
 1. **异步语义**：所有 Read/Write 返回 `E_OK` 只是“已接受”。必须轮询状态接口，不能立即认为完成。
 2. **调度顺序**：必须 `MiniFlsIf → MiniFee → MiniNvm`。漏调或乱序会导致作业永不收敛。
 3. **地址基准**：MiniFee 传给 MiniFlsIf 的是偏移量（绝对地址 − `MINIFEE_FLS_BASE`）；`MINIFEE_FLS_BASE` 配错会擦写错误区域。
-4. **写缓冲持久性**：MiniFee 的 `writeBuf` / `writeHdrBuf` 是静态上下文成员。底层 Fls 异步持有源指针，**禁止**把它们改成栈上临时数组。
-5. **一次编程约束**：RH850 数据 Flash 每个程序单元在两次擦除间只能编程一次。因此块头与数据必须同一次写入，不能先写头再补标志；任何区域都不得二次编程。
-6. **CRC-8**：多项式 `0x07`，初始值 `0x00`。簇头校验前 7 字节；块头校验 `BlockNumber + Length + PrevOffset` 共 7 字节。修改格式时须同步。
+4. **写缓冲持久性**：MiniFee 的 `writeBuf`（与读缓冲 `blockDataBuf` 合并在 `jobBuf` 联合体，读/写作业互斥、不得跨类型混用）与 `writeHdrBuf` 是静态上下文成员。底层 Fls 异步持有源指针，**禁止**把它们改成栈上临时数组。
+5. **一次编程约束**：目标数据 Flash 每个程序单元在两次擦除间只能编程一次（RH850 数据 Flash 即如此）。因此块头与数据必须同一次写入，不能先写头再补标志；任何区域都不得二次编程。
+6. **CRC-8（固定格式常量）**：多项式 `0x07`，初始值 `0x00`，不反相。簇头校验其前 7 字节；块头校验 `BlockNumber(3) + Length(4)` 共 7 字节。修改格式时须同步代码与文档。
 7. **字节序**：簇头/块头按大端显式序列化，与主机字节序无关；数据区按原始字节搬运，不涉及字节序转换。
 8. **BlockId 基准**：MiniFee 从 0 开始，MiniNvm 从 1 开始，映射由描述符维护，勿混用。
 9. **配置校验**：`MiniNvm_Init` 校验失败时模块不可用，且不会有显式报错（结果表现为所有请求 `E_NOT_OK`），联调时应先确认配置。
 10. **看门狗**：迁移/擦除是长耗时操作，须在轮询循环中喂狗；MiniFee 不负责喂狗。
 11. **测试代码**：`MiniNvm_Test` 会擦除并重写数据 Flash 区域，**量产固件必须删除调用**。
 12. **内存段**：当前实现使用 `static` 上下文，未使用 AUTOSAR `MemMap` 段。若目标工程强制要求内存段划分，需补充 `MemMap.h` 处理。
+13. **多块结果定型**：`ReadAll`/`WriteAll` 的 `MultiResult` 在所有子请求出清后才变为 `OK`/`NOT_OK`，期间保持 `PENDING`。轮询循环须以 `MiniNvm_GetMultiJobStatus()` 为准持续驱动，**不能**因某个子块失败就提前退出；否则未完成请求滞留队列，后续 `WriteAll` 会因队列非空返回 `E_NOT_OK` 而无法落盘。
 
 ---
 
@@ -257,12 +270,11 @@ MiniNvm_ReadAll();
 | 用例 | 验证点 |
 | --- | --- |
 | PARAM | 非法参数、未初始化拒绝 |
-| BLANK | 空白区读取失败处理 |
+| BLANK | 空白区读取无记录返回全零默认值 |
 | BASIC | 单块写后读一致性 |
-| SOURCE_COPY | 写请求入队时的数据快照 |
+| SOURCE_COPY | 单块写请求入队即快照源数据（入队后修改源缓冲不影响写入） |
 | ALL | `WriteAll` / `ReadAll` 全量一致性 |
 | CANCEL | 取消作业后结果置失败 |
-| FAILURE | 默认值恢复失败处理 |
 | ROTATE | 多次整块重写触发簇迁移，验证数据保全与 Generation 递增 |
 
 自检为破坏性操作，仅用于开发/产线验证；结果见全局变量 `MiniNvm_TestResult`。集成到正式产品前请移除调用。
