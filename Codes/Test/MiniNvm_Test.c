@@ -30,7 +30,13 @@
 
 #define MININVM_TEST_POLL_GUARD       (2000000UL)
 #define MININVM_TEST_LENGTH           (MININVM_MAX_BLOCK_LENGTH)
-#define MININVM_TEST_ROT_ROUNDS       (8u)   /* 轮换/迁移用例轮数：每轮整块重写全部 Block，触发多次簇迁移 */
+
+/* 轮换/迁移用例轮数：每轮整块重写全部 Block，需足够多轮才能填满簇并触发迁移。
+ * 轮数取决于簇容量与每轮写入量（单簇需写入约“簇长 / 每轮字节数”轮才触发一次迁移）：
+ * 目标工程可按实际簇容量调整；主机验证（CMake）会覆盖为更大的值以真实覆盖迁移路径。 */
+#ifndef MININVM_TEST_ROT_ROUNDS
+#define MININVM_TEST_ROT_ROUNDS       (8u)
+#endif
 
 /* ================================================== module overview =============================================== */
 /**

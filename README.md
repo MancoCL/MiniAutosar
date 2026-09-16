@@ -44,6 +44,11 @@ MiniAutosar/
 │   │   ├── MiniFee/                存储核心（MiniFee.h / .c）
 │   │   └── MiniNvm/                逻辑块与请求队列（MiniNvm.h / .c）
 │   └── Test/                       开发阶段自检（MiniNvm_Test.h / .c）
+├── Codes/Port/                     Windows 主机验证适配层（类型桩、RAM Fls 仿真、自检入口 main）
+├── CMakeLists.txt                  主机验证构建工程（MinGW-w64 GCC + Ninja）
+├── CMakePresets.json               构建/测试预设（windows-mingw-debug）
+├── tools/setup-toolchain.ps1       便携安装 GCC / CMake / Ninja 并写入用户 PATH
+├── .vscode/                        VS Code 构建任务与 gdb 调试配置
 └── Docs/
     ├── MiniFlsIf_SDD.md            MiniFlsIf 详细设计
     ├── MiniFee_SDD.md              MiniFee 详细设计
@@ -149,6 +154,40 @@ Cluster(簇) = [8B 簇头][记录1][记录2]...[记录N][0xFF 空白...]
 - [MiniNvm 软件详细设计](Docs/MiniNvm_SDD.md)
 - [MiniFee / MiniNvm / MiniFlsIf 集成手册](Docs/MiniStorage_集成手册.md)
 - [变更记录](Docs/变更记录.md)
+
+## Windows 本地验证环境
+
+仓库附带一套 Windows 主机验证工程，可在 PC 上**编译、运行并单步调试**三个模块，且**不改动 `Codes/` 下任何目标源码**：
+
+- `Codes/Port/`：主机适配层。最小 AUTOSAR 类型头（`Common.h` / `Std_Types.h` / `MemIf_Types.h` / `MemM.h` / `SchM_Fls.h`）、`CommF_*` 辅助实现、**RAM 仿真 Fls 驱动**（`Fls.c`，保留异步语义并近似“两次擦除间只编程一次”约束）与自检入口 `main.c`。
+- `CMakeLists.txt` / `CMakePresets.json`：MinGW-w64 GCC + Ninja 构建，产物 `build/miniautosar_host.exe`。
+- `.vscode/`：VS Code 构建任务与 gdb 调试配置。
+- `tools/setup-toolchain.ps1`：便携安装 GCC / CMake / Ninja 到 `%LOCALAPPDATA%\MiniAutosarTools` 并写入用户 PATH。
+
+### 1. 安装工具链（一次性）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\setup-toolchain.ps1
+```
+
+安装完成后**重启终端 / VS Code** 使 PATH 生效。
+
+### 2. 构建、运行、测试
+
+```powershell
+cmake --preset windows-mingw-debug
+cmake --build --preset windows-mingw-debug
+ctest  --preset windows-mingw-debug --output-on-failure
+.\build\miniautosar_host.exe            # 运行自检，退出码 0 表示全部通过
+.\build\miniautosar_host.exe --dump     # 额外 dump 仿真 Flash 镜像
+```
+
+### 3. 调试
+
+VS Code 中按 `F5`，选择 **“调试自检 (gdb)”**。可在 `MiniFee_MainFunction` / `MiniNvm_MainFunction` / FindAddr 迁移子状态机等处下断点；仿真 Flash 内容见 `Codes/Port/Fls.c` 的 `Fls_Sim_Memory[]`。
+
+> 主机自检通过 CMake 把 `MININVM_TEST_ROT_ROUNDS`（目标默认 8）覆盖为 240，使 ROTATE 用例真实填满簇并触发迁移；目标工程默认值不变。
+> 仿真 Flash 几何定义在 `Codes/Port/Fls.c`，须与 `MiniFee_ClusterConfig[]` 保持一致。
 
 ## 自检
 
