@@ -8,9 +8,10 @@
 ************************************************************************************************
 *   工程/产品     @:
 *   标题         @:
-*   作者         @: CaoLiang
+*   作者         @: Manco
 ************************************************************************************************
 *   描述         @: MiniNvm 可变配置参数头文件：块数量/队列容量、块描述符类型与各块 RAM buffer 声明。
+*                   本文件仅为**示例配置**，集成时请按实际工程替换块表与 RAM buffer。
 *
 ************************************************************************************************
 *   限制         @: 无
@@ -20,7 +21,8 @@
 *
 *   版本       日期          编写人            CR#         描述
 *   --------   -----------   ----------------   --------    -----------------------
-*   V1.0       2026/09/10    CaoLiang           N/A         初版发布
+*   V1.0       2026/09/10    Manco              N/A         初版发布
+*   V1.1       2026/09/16    Manco              N/A         重构：队列仅存元数据、新增 RAM 接口；配置精简为示例
 *
 ************************************************************************************************
 * END_FILE_HDR*/
@@ -34,79 +36,25 @@
 /* 块数量与长度上限跟随 MiniFee 配置（MINIFEE_BLOCK_MAX / MINIFEE_MAX_BLOCK_DATA_SIZE） */
 #define MININVM_BLOCK_COUNT             ((uint32)MINIFEE_BLOCK_MAX)
 #define MININVM_MAX_BLOCK_LENGTH        (MINIFEE_MAX_BLOCK_DATA_SIZE)
-#define MININVM_QUEUE_SIZE              (MININVM_BLOCK_COUNT)
 
-typedef Std_ReturnType (*MiniNvm_InitBlockCallbackType)(uint8 blockId, uint8* ramPtr);
+/* 单块请求队列容量（用户自定义，示例值 8）：
+ * 只约束同一时刻排队等待处理的单块 ReadBlock/WriteBlock 请求数，与块数、块长无关；
+ * ReadAll/WriteAll 为一次性作业，不经队列，规模再大也不占用队列。 */
+#define MININVM_QUEUE_SIZE              (8u)
 
+/* 块描述符：把 MiniNvm 逻辑块映射到 MiniFee 块与上层 RAM buffer */
 typedef struct
 {
-    uint8 BlockId;
-    MiniFee_BlockIdType MiniFeeBlockId;
-    uint32 Length;
-    uint8* RamBlockAddress;
-    const uint8* RomBlockAddress;
-    MiniNvm_InitBlockCallbackType InitBlockCallback;
+    uint8 BlockId;                       /* MiniNvm 逻辑块号（从 1 开始），须等于数组下标 + 1 */
+    MiniFee_BlockIdType MiniFeeBlockId;  /* 对应 MiniFee 块号（从 0 开始），须等于数组下标 */
+    uint32 Length;                       /* 逻辑数据长度，须等于 MiniFee_BlockConfig[].Length */
+    uint8* RamBlockAddress;              /* 该块独立 RAM buffer 地址，不可为空 */
 } MiniNvm_BlockDescriptorType;
 
-/* 每个 Block 的独立 RAM buffer（与 MiniFee 块配置一一对应，长度等于对应块 Length） */
-extern uint8 MiniNvm_RamBlock_1[2u];
-extern uint8 MiniNvm_RamBlock_2[4u];
-extern uint8 MiniNvm_RamBlock_3[4u];
-extern uint8 MiniNvm_RamBlock_4[4u];
-extern uint8 MiniNvm_RamBlock_5[4u];
-extern uint8 MiniNvm_RamBlock_6[1u];
-extern uint8 MiniNvm_RamBlock_7[1u];
-extern uint8 MiniNvm_RamBlock_8[2u];
-extern uint8 MiniNvm_RamBlock_9[6u];
-extern uint8 MiniNvm_RamBlock_10[16u];
-extern uint8 MiniNvm_RamBlock_11[16u];
-extern uint8 MiniNvm_RamBlock_12[16u];
-extern uint8 MiniNvm_RamBlock_13[16u];
-extern uint8 MiniNvm_RamBlock_14[16u];
-extern uint8 MiniNvm_RamBlock_15[16u];
-extern uint8 MiniNvm_RamBlock_16[16u];
-extern uint8 MiniNvm_RamBlock_17[16u];
-extern uint8 MiniNvm_RamBlock_18[16u];
-extern uint8 MiniNvm_RamBlock_19[16u];
-extern uint8 MiniNvm_RamBlock_20[16u];
-extern uint8 MiniNvm_RamBlock_21[16u];
-extern uint8 MiniNvm_RamBlock_22[16u];
-extern uint8 MiniNvm_RamBlock_23[16u];
-extern uint8 MiniNvm_RamBlock_24[16u];
-extern uint8 MiniNvm_RamBlock_25[16u];
-extern uint8 MiniNvm_RamBlock_26[16u];
-extern uint8 MiniNvm_RamBlock_27[16u];
-extern uint8 MiniNvm_RamBlock_28[10u];
-extern uint8 MiniNvm_RamBlock_29[5u];
-extern uint8 MiniNvm_RamBlock_30[5u];
-extern uint8 MiniNvm_RamBlock_31[3u];
-extern uint8 MiniNvm_RamBlock_32[16u];
-extern uint8 MiniNvm_RamBlock_33[17u];
-extern uint8 MiniNvm_RamBlock_34[5u];
-extern uint8 MiniNvm_RamBlock_35[10u];
-extern uint8 MiniNvm_RamBlock_36[10u];
-extern uint8 MiniNvm_RamBlock_37[11u];
-extern uint8 MiniNvm_RamBlock_38[5u];
-extern uint8 MiniNvm_RamBlock_39[5u];
-extern uint8 MiniNvm_RamBlock_40[8u];
-extern uint8 MiniNvm_RamBlock_41[3u];
-extern uint8 MiniNvm_RamBlock_42[20u];
-extern uint8 MiniNvm_RamBlock_43[5u];
-extern uint8 MiniNvm_RamBlock_44[5u];
-extern uint8 MiniNvm_RamBlock_45[32u];
-extern uint8 MiniNvm_RamBlock_46[5u];
-extern uint8 MiniNvm_RamBlock_47[5u];
-extern uint8 MiniNvm_RamBlock_48[458u];
-extern uint8 MiniNvm_RamBlock_49[1u];
-extern uint8 MiniNvm_RamBlock_50[1u];
-extern uint8 MiniNvm_RamBlock_51[2u];
-extern uint8 MiniNvm_RamBlock_52[1u];
-extern uint8 MiniNvm_RamBlock_53[1u];
-extern uint8 MiniNvm_RamBlock_54[1u];
-extern uint8 MiniNvm_RamBlock_55[112u];
-extern uint8 MiniNvm_RamBlock_56[21u];
-extern uint8 MiniNvm_RamBlock_57[16u];
-extern uint8 MiniNvm_RamBlock_58[880u];
+/* 每个 Block 的独立 RAM buffer（示例：长度等于对应块 Length） */
+extern uint8 MiniNvm_RamBlock_ExampleFlag[4u];
+extern uint8 MiniNvm_RamBlock_ExampleConfig[10u];
+extern uint8 MiniNvm_RamBlock_ExampleVssData[32u];
 
 extern const MiniNvm_BlockDescriptorType MiniNvm_BlockDescriptor[MININVM_BLOCK_COUNT];
 
