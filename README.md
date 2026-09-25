@@ -153,6 +153,7 @@ Cluster(簇) = [8B 簇头][记录1][记录2]...[记录N][0xFF 空白...]
 - [MiniFee 软件详细设计](Docs/MiniFee_SDD.md)
 - [MiniNvm 软件详细设计](Docs/MiniNvm_SDD.md)
 - [MiniFee / MiniNvm / MiniFlsIf 集成手册](Docs/MiniStorage_集成手册.md)
+- [嵌入式代码 Windows 主机仿真测试实现指南](Docs/主机仿真测试实现指南.md)
 - [变更记录](Docs/变更记录.md)
 
 ## Windows 本地验证环境
